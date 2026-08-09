@@ -33,3 +33,17 @@ def test_update_check_ignores_equal_older_and_non_numeric_versions(tmp_path, mon
     for remote in ("0.2.0", "0.1.9", "main"):
         monkeypatch.setattr(update_check, "_fetch_remote_version", lambda timeout, value=remote: value)
         assert update_check.check_for_update("0.2.0") is None
+
+
+def test_update_notification_links_release_notes_before_upgrade(monkeypatch, capsys):
+    monkeypatch.setattr(
+        update_check,
+        "check_for_update",
+        lambda current_version: {"current_version": current_version, "remote_version": "0.3.0"},
+    )
+
+    update_check.notify_if_update_available("0.2.0")
+
+    message = capsys.readouterr().err
+    assert "toe-dac changelog --version 0.3.0" in message
+    assert "toe-dac upgrade" in message

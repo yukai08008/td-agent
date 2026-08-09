@@ -55,6 +55,18 @@ TOE_DAC_UPDATE_CHECK_TIMEOUT=1.5
 
 设置 `TOE_DAC_UPDATE_CHECK=false` 可以关闭更新检查。
 
+## 变更日志
+
+```bash
+# 查看完整变更日志
+toe-dac changelog
+
+# 更新前查看指定版本
+toe-dac changelog --version 0.2.0
+```
+
+仓库内以 [CHANGELOG.md](CHANGELOG.md) 作为唯一事实来源；正式版本同时使用 `vX.Y.Z` Tag 和 GitHub Release 展示。
+
 ## 使用 uv 直接安装
 
 ```bash

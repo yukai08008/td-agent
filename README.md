@@ -55,6 +55,18 @@ TOE_DAC_UPDATE_CHECK_TIMEOUT=1.5
 
 Set `TOE_DAC_UPDATE_CHECK=false` to disable it.
 
+## Changelog
+
+```bash
+# Show the complete changelog
+toe-dac changelog
+
+# Show one release before upgrading
+toe-dac changelog --version 0.2.0
+```
+
+Repository history: [CHANGELOG.md](CHANGELOG.md). Formal versions are also published as GitHub Releases with `vX.Y.Z` tags.
+
 ## Install with uv directly
 
 ```bash
