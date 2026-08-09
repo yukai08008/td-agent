@@ -1,65 +1,25 @@
-# Changelog
+# TD Agent 版本记录
 
-All notable changes to TD Agent are documented in this file.
+这里汇总 TD Agent 的正式版本。每个版本的详细说明同时发布在
+[GitHub Releases](https://github.com/yukai08008/td-agent/releases)，可直接在网页查看。
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+版本号遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
 
-## [Unreleased]
+## 版本总览
 
-### Added
+| 版本 | 日期 | 版本主题 | 详细说明 |
+| --- | --- | --- | --- |
+| `v0.3.1` | 2026-08-09 | GitHub-first 的结构化版本展示 | [版本说明](docs/releases/v0.3.1.md) |
+| `v0.3.0` | 2026-08-09 | 临时运行或固定安装指定版本 | [版本说明](docs/releases/v0.3.0.md) |
+| `v0.2.0` | 2026-08-09 | 可公开独立安装与安全配置 | [版本说明](docs/releases/v0.2.0.md) |
+| `v0.1.0` | 2026-08-09 | TOE-DAC 交互式原型 | [版本说明](docs/releases/v0.1.0.md) |
 
-- Reserved for changes that have not yet been released.
+## 版本策略
 
-## [0.3.0] - 2026-08-09
+- `v0.x.0`：增加用户可见能力或调整产品行为。
+- `v0.x.y`：兼容性修正、文档和发布体验改进。
+- Git Tag 固定代码快照，GitHub Release 展示该版本的结构化变化。
+- README 只展示最近版本摘要，完整历史以本页和 Releases 为准。
 
-### Added
-
-- Temporary execution of an exact tagged release with `toe-dac --use-version X.Y.Z`.
-- Exact-version installation with `toe-dac upgrade --version X.Y.Z`.
-- Version selection in the one-line installer with `install.sh install X.Y.Z` or `update X.Y.Z`.
-
-### Changed
-
-- Explicit older-release runs suppress the normal latest-version notification for that process.
-
-## [0.2.0] - 2026-08-09
-
-### Added
-
-- One-line install, update, and uninstall for Linux and macOS.
-- Chinese documentation in `README_zh.md`.
-- `toe-dac --version` and `toe-dac upgrade` commands.
-- Configurable startup update checks with cache and network timeout.
-- Machine-local installed configuration under `~/.config/td-agent/`.
-- Installed runtime data default under `~/.local/share/td-agent/`.
-- Embedded minimal declarative state-machine runtime for public standalone installation.
-- `toe-dac changelog` terminal release-note viewer.
-
-### Changed
-
-- Reworked README around install, uninstall, update, usage, and architecture.
-- Removed the private local-path `andy-state` dependency.
-- Declared `pydantic` as a direct runtime dependency.
-
-### Security
-
-- Kept model API keys in ignored `.env.local` files and model configuration limited to `apiKeyEnv` references.
-- Verified source distributions and wheels do not contain local secrets.
-
-## [0.1.0] - 2026-08-09
-
-### Added
-
-- Persistent User Threads, Sessions, TD state, messages, events, and operation logs.
-- TOE-DAC Target, Observe, Estimate, Decide, Act, and Check state chain.
-- Natural-language conversation controller with structured model outputs.
-- Target validation, automatic repair, recovery budgets, and human escalation.
-- Action Check and Target Check separation.
-- Exception-treatment experience ledger with success and failure outcomes.
-- Executable mock and live E2E proof-of-concept scenarios.
-- Rich interactive terminal interface.
-
-[Unreleased]: https://github.com/yukai08008/td-agent/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/yukai08008/td-agent/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/yukai08008/td-agent/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/yukai08008/td-agent/releases/tag/v0.1.0
+[查看所有 Releases](https://github.com/yukai08008/td-agent/releases) ·
+[比较 v0.3.0...v0.3.1](https://github.com/yukai08008/td-agent/compare/v0.3.0...v0.3.1)

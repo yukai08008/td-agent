@@ -85,6 +85,7 @@ def notify_if_update_available(current_version: str) -> None:
         return
     print(
         f"TD Agent update available: {update['current_version']} → {update['remote_version']}. "
-        f"Run `toe-dac changelog --version {update['remote_version']}` then `toe-dac upgrade`.",
+        f"Release notes: https://github.com/yukai08008/td-agent/releases/tag/v{update['remote_version']}. "
+        "Run `toe-dac upgrade` to update.",
         file=sys.stderr,
     )

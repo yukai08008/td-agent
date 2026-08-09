@@ -14,7 +14,6 @@ from state_machine import TransitionError
 from .e2e import CaseRegistry, E2ERunner
 from .conversation import ConversationController
 from .chat_ui import run_chat
-from .changelog import extract_version, load_changelog
 from . import __version__
 from .cli_settings import (
     default_data_dir,
@@ -192,8 +191,6 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--model-config", help="local model registry JSON")
     upgrade = subparsers.add_parser("upgrade", help="install the latest or an exact GitHub release")
     upgrade.add_argument("--version", dest="upgrade_version", help="install an exact release, for example 0.2.0")
-    changelog = subparsers.add_parser("changelog", help="show release notes")
-    changelog.add_argument("--version", dest="changelog_version", help="show one version, for example 0.2.0")
     return parser
 
 
@@ -392,20 +389,6 @@ def main() -> None:
         if result.returncode != 0:
             raise SystemExit(result.returncode)
         print("Installation complete. Run `toe-dac --version` to verify the installed version.")
-    elif command == "changelog":
-        try:
-            content = load_changelog()
-            if args.changelog_version:
-                content = extract_version(content, args.changelog_version)
-        except (OSError, RuntimeError, ValueError) as exc:
-            parser.error(str(exc))
-        if sys.stdout.isatty():
-            from rich.console import Console
-            from rich.markdown import Markdown
-
-            Console().print(Markdown(content))
-        else:
-            print(content)
 
 
 if __name__ == "__main__":
