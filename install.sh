@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="yukai08008/td-agent"
-LATEST_VERSION="0.4.2"
+LATEST_VERSION="0.4.3"
 TOOL_NAME="toe-dac"
 BIN_NAME="toe-dac"
 INSTALL_DIR="${HOME}/.local/bin"
@@ -70,6 +70,39 @@ select_release() {
   RELEASE_LABEL="v${requested}"
 }
 
+run_uv_install() {
+  local package="$1"
+  local process_id heartbeat_id started_at current_time elapsed status
+  local -a command=(uv tool install --force "$package")
+  case "${TD_AGENT_INSTALL_VERBOSE:-false}" in
+    1|true|TRUE|yes|YES) command=(uv --verbose tool install --force "$package") ;;
+  esac
+
+  info "Package source: ${package}"
+  info "Runtime dependencies: rich, questionary (8 packages on an empty cache)."
+  info "uv cache: $(uv cache dir)"
+  info "uv tools: $(uv tool dir)"
+  "${command[@]}" &
+  process_id=$!
+  started_at=$(date +%s)
+  (
+    while sleep 5; do
+      if ! kill -0 "$process_id" 2>/dev/null; then
+        exit
+      fi
+      current_time=$(date +%s)
+      elapsed=$((current_time - started_at))
+      info "uv is still working (${elapsed}s): resolving metadata or downloading packages..."
+    done
+  ) &
+  heartbeat_id=$!
+  status=0
+  wait "$process_id" || status=$?
+  kill "$heartbeat_id" 2>/dev/null || true
+  wait "$heartbeat_id" 2>/dev/null || true
+  return "$status"
+}
+
 ensure_uv() {
   if command -v uv >/dev/null 2>&1; then
     return
@@ -128,12 +161,12 @@ install_or_update() {
   local action="$1"
   info "${action} TD Agent ${RELEASE_LABEL} from github.com/${REPO}..."
   info "Installing the isolated CLI package. Dependency progress will appear below."
-  if ! UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-30}" uv tool install --force "$PACKAGE_SPEC"; then
+  if ! UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-30}" run_uv_install "$PACKAGE_SPEC"; then
     if [ "$PACKAGE_SPEC" = "$PACKAGE_FALLBACK" ]; then
       error "Package installation failed. Check the network output above."
     fi
     warn "Prebuilt wheel unavailable; falling back to the Git repository."
-    UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-30}" uv tool install --force "$PACKAGE_FALLBACK"
+    UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-30}" run_uv_install "$PACKAGE_FALLBACK"
   fi
   ensure_config
   if command -v "$BIN_NAME" >/dev/null 2>&1; then

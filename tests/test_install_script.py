@@ -52,3 +52,8 @@ def test_installer_network_calls_are_bounded_and_visible():
     assert "--max-time 120" in script
     assert "--retry 3" in script
     assert "--progress-bar" in script
+    assert "uv is still working" in script
+    assert "TD_AGENT_INSTALL_VERBOSE" in script
+    assert "uv --verbose tool install" in script
+    assert "uv cache dir" in script
+    assert "uv tool dir" in script
