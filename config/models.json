@@ -1,0 +1,148 @@
+{
+  "models": [
+    {
+      "id": "deepseek-v4-flash",
+      "name": "Andy DeepSeek V4 Flash",
+      "vendor": "DeepSeek",
+      "url": "https://api.deepseek.com/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_DEEPSEEK_API_KEY"
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "name": "Andy DeepSeek V4 Pro",
+      "vendor": "DeepSeek",
+      "url": "https://api.deepseek.com/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_DEEPSEEK_API_KEY"
+    },
+    {
+      "id": "MiniMax-M2.7",
+      "name": "AndyM2.7",
+      "vendor": "MiniMax",
+      "url": "https://api.minimaxi.com/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_MINIMAX_API_KEY"
+    },
+    {
+      "id": "ark-code-latest",
+      "name": "AndyDoubaoCode",
+      "vendor": "Doubao",
+      "url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_DOUBAO_API_KEY"
+    },
+    {
+      "id": "ark-code-latest-alt",
+      "name": "AndyDoubaoCode-Alt",
+      "vendor": "Doubao",
+      "url": "https://ark.cn-beijing.volces.com/api/coding/v3",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_DOUBAO_ALT_API_KEY"
+    },
+    {
+      "id": "kimi-k2.6",
+      "name": "OpenCode Go (Kimi K2.6)",
+      "vendor": "Moonshot AI",
+      "url": "https://opencode.ai/zen/go/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_OPENCODE_API_KEY"
+    },
+    {
+      "id": "glm-5.1",
+      "name": "OpenCode Go (GLM-5.1)",
+      "vendor": "Zhipu AI",
+      "url": "https://opencode.ai/zen/go/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_OPENCODE_API_KEY"
+    },
+    {
+      "id": "glm-5",
+      "name": "OpenCode Go (GLM-5)",
+      "vendor": "Zhipu AI",
+      "url": "https://opencode.ai/zen/go/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_OPENCODE_API_KEY"
+    },
+    {
+      "id": "kimi-k2.5",
+      "name": "OpenCode Go (Kimi K2.5)",
+      "vendor": "Moonshot AI",
+      "url": "https://opencode.ai/zen/go/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_OPENCODE_API_KEY"
+    },
+    {
+      "id": "mimo-v2-pro",
+      "name": "OpenCode Go (MiMo V2 Pro)",
+      "vendor": "MiMo",
+      "url": "https://opencode.ai/zen/go/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_OPENCODE_API_KEY"
+    },
+    {
+      "id": "mimo-v2-omni",
+      "name": "OpenCode Go (MiMo V2 Omni)",
+      "vendor": "MiMo",
+      "url": "https://opencode.ai/zen/go/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_OPENCODE_API_KEY"
+    },
+    {
+      "id": "minimax-m2.7",
+      "name": "OpenCode Go (MiniMax M2.7)",
+      "vendor": "MiniMax",
+      "url": "https://opencode.ai/zen/go/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true,
+      "apiKeyEnv": "TOE_DAC_OPENCODE_API_KEY"
+    }
+  ]
+}

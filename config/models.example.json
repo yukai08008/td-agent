@@ -1,0 +1,16 @@
+{
+  "models": [
+    {
+      "id": "your-model-id",
+      "name": "Your Model",
+      "vendor": "OpenAI-compatible",
+      "apiKeyEnv": "TOE_DAC_EXAMPLE_API_KEY",
+      "url": "https://example.com/v1/chat/completions",
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 8192,
+      "supportsToolCall": true,
+      "supportsImages": false,
+      "enabled": true
+    }
+  ]
+}
