@@ -1,6 +1,6 @@
 [project]
 name = "toe-dac"
-version = "0.4.1"
+version = "0.4.2"
 description = "Persistent interactive agent CLI based on the TOE-DAC control protocol"
 requires-python = ">=3.12"
 dependencies = [
@@ -18,9 +18,13 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/toe_dac", "src/state_machine"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"config/models.json" = "toe_dac/resources/models.json"
+".env.example" = "toe_dac/resources/.env.example"
+".env" = "toe_dac/resources/.env"
+
 [tool.hatch.build]
 exclude = [
-    "config/models.json",
     "data/**",
     "work/**",
 ]

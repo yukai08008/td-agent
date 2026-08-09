@@ -4,6 +4,7 @@ import json
 import os
 import re
 from getpass import getpass
+from importlib.resources import files
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -11,10 +12,45 @@ import questionary
 from rich.console import Console
 from rich.table import Table
 
-from .cli_settings import enabled_models
+from .cli_settings import enabled_models, user_config_dir
+from .environment import find_project_root
 
 
 ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+CONFIG_RESOURCES = {
+    "models.json": "config/models.json",
+    ".env.example": ".env.example",
+    ".env": ".env",
+}
+
+
+def _resource_text(resource_name: str, source_path: str) -> str:
+    packaged = files("toe_dac").joinpath("resources", resource_name)
+    if packaged.is_file():
+        return packaged.read_text(encoding="utf-8")
+    source = find_project_root() / source_path
+    if source.is_file():
+        return source.read_text(encoding="utf-8")
+    raise FileNotFoundError(f"missing bundled configuration resource: {resource_name}")
+
+
+def initialize_user_config(target: str | Path | None = None) -> list[Path]:
+    directory = Path(target).expanduser() if target else user_config_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o700)
+    created: list[Path] = []
+    for name, source_path in CONFIG_RESOURCES.items():
+        destination = directory / name
+        if destination.exists():
+            continue
+        destination.write_text(_resource_text(name, source_path), encoding="utf-8")
+        created.append(destination)
+    local = directory / ".env.local"
+    if not local.exists():
+        local.write_text((directory / ".env.example").read_text(encoding="utf-8"), encoding="utf-8")
+        created.append(local)
+    local.chmod(0o600)
+    return created
 
 
 def environment_root(config_path: str | Path) -> Path:

@@ -21,7 +21,12 @@ from .cli_settings import (
     resolve_thread,
     user_config_dir,
 )
-from .config_manager import ensure_model_ready, print_config_status, run_config_manager
+from .config_manager import (
+    ensure_model_ready,
+    initialize_user_config,
+    print_config_status,
+    run_config_manager,
+)
 from .environment import find_project_root, load_environment
 from .releases import forwarded_version_args, package_spec
 from .update_check import notify_if_update_available
@@ -186,6 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
     config_parser = subparsers.add_parser("config", help="configure model API keys and defaults")
     config_parser.add_argument("--model-config", help="local model registry JSON")
     config_parser.add_argument("--show", action="store_true", help="show status without opening the manager")
+    config_parser.add_argument("--init", action="store_true", help="initialize missing machine-local config files")
     doctor = subparsers.add_parser("doctor", help="check whether interactive chat can start")
     doctor.add_argument("--model", help="model id to validate")
     doctor.add_argument("--model-config", help="local model registry JSON")
@@ -360,12 +366,19 @@ def main() -> None:
                 f"{session.get('started_at', '')}"
             )
     elif command == "config":
-        config_path = model_config_path(args.model_config)
         try:
-            if args.show or not sys.stdin.isatty():
-                print_config_status(config_path)
+            if args.init:
+                target = Path(args.model_config).expanduser().parent if args.model_config else user_config_dir()
+                created = initialize_user_config(target)
+                print(f"Config ready: {target.resolve()}")
+                for path in created:
+                    print(f"Created: {path.name}")
             else:
-                run_config_manager(config_path)
+                config_path = model_config_path(args.model_config)
+                if args.show or not sys.stdin.isatty():
+                    print_config_status(config_path)
+                else:
+                    run_config_manager(config_path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             parser.error(str(exc))
     elif command == "doctor":

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="yukai08008/td-agent"
-LATEST_VERSION="0.4.1"
+LATEST_VERSION="0.4.2"
 TOOL_NAME="toe-dac"
 BIN_NAME="toe-dac"
 INSTALL_DIR="${HOME}/.local/bin"
@@ -11,6 +11,7 @@ RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
 PACKAGE_SPEC="git+https://github.com/${REPO}.git"
 PACKAGE_FALLBACK="git+https://github.com/${REPO}.git"
 RELEASE_LABEL="latest"
+CONFIG_BUNDLED="false"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -32,13 +33,19 @@ download() {
 
 select_package() {
   local version="$1"
-  local major minor
-  IFS='.' read -r major minor _ <<< "$version"
+  local major minor patch
+  IFS='.' read -r major minor patch <<< "$version"
+  patch="${patch%%-*}"
   PACKAGE_FALLBACK="git+https://github.com/${REPO}.git@v${version}"
   if [[ "$version" != *-* ]] && { [ "$major" -gt 0 ] || [ "$minor" -ge 4 ]; }; then
     PACKAGE_SPEC="https://github.com/${REPO}/releases/download/v${version}/toe_dac-${version}-py3-none-any.whl"
   else
     PACKAGE_SPEC="$PACKAGE_FALLBACK"
+  fi
+  if [[ "$version" != *-* ]] && { [ "$major" -gt 0 ] || [ "$minor" -gt 4 ] || { [ "$minor" -eq 4 ] && [ "$patch" -ge 2 ]; }; }; then
+    CONFIG_BUNDLED="true"
+  else
+    CONFIG_BUNDLED="false"
   fi
 }
 
@@ -92,6 +99,11 @@ ensure_path() {
 }
 
 ensure_config() {
+  if [ "$CONFIG_BUNDLED" = "true" ]; then
+    info "Initializing bundled machine-local configuration..."
+    "$BIN_NAME" config --init
+    return
+  fi
   mkdir -p "$CONFIG_DIR"
   chmod 700 "$CONFIG_DIR"
 

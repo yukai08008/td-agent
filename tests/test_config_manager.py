@@ -8,6 +8,7 @@ import pytest
 from toe_dac.config_manager import (
     configure_model,
     ensure_model_ready,
+    initialize_user_config,
     local_env_path,
     model_statuses,
     resolve_ready_model,
@@ -86,3 +87,17 @@ def test_noninteractive_startup_points_to_config_command(tmp_path, monkeypatch):
     monkeypatch.setenv("TOE_DAC_MODEL", "")
     with pytest.raises(ValueError, match=r"run `toe-dac config`"):
         ensure_model_ready(path, interactive=False)
+
+
+def test_initialize_user_config_is_local_and_non_destructive(tmp_path):
+    target = tmp_path / "td-agent"
+
+    created = initialize_user_config(target)
+
+    assert {path.name for path in created} == {"models.json", ".env.example", ".env", ".env.local"}
+    assert json.loads((target / "models.json").read_text())["models"]
+    assert stat.S_IMODE((target / ".env.local").stat().st_mode) == 0o600
+
+    (target / ".env.local").write_text("KEEP=yes\n", encoding="utf-8")
+    assert initialize_user_config(target) == []
+    assert (target / ".env.local").read_text(encoding="utf-8") == "KEEP=yes\n"

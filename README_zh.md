@@ -80,7 +80,7 @@ curl -fL --connect-timeout 10 --retry 3 --progress-bar \
 
 ## 当前版本
 
-当前稳定版本为 [v0.4.1](https://github.com/yukai08008/td-agent/releases/tag/v0.4.1)，运行时依赖已收敛到与 agenty 相同的轻量级，并支持启动配置引导、持久化交互和指定版本运行。
+当前稳定版本为 [v0.4.2](https://github.com/yukai08008/td-agent/releases/tag/v0.4.2)，运行时依赖已收敛到与 agenty 相同的轻量级，默认配置随 wheel 本地初始化，并支持启动配置引导和持久化交互。
 
 [完整版本记录](versions.md) · [GitHub Releases](https://github.com/yukai08008/td-agent/releases)
 
