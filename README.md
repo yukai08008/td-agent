@@ -76,7 +76,7 @@ Tagged standalone execution is supported from `v0.2.0`. Set `TOE_DAC_DATA` only 
 
 ## Current release
 
-The current source version is `v0.6.0`. Every TOE-DAC stage retains model judgment, while a deterministic control plane handles canonical file persistence, evidence registration, protocol normalization, hard checks, and bounded runtime recovery.
+The current source version is `v0.6.1`. Every TOE-DAC stage retains model judgment, while a deterministic control plane handles canonical file persistence, evidence registration, protocol normalization, hard checks, and bounded runtime recovery. This patch also prevents negated instructions such as “do not copy the screenshot” from being mistaken for a relocation Action.
 
 See [模型判断与确定性控制边界](docs/model-control-boundary.md) for the stage-by-stage contract.
 

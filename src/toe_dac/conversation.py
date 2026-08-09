@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import json
+import re
 import time
 from typing import Any
 
@@ -1167,13 +1168,8 @@ class ConversationController:
             # starts with an acquisition verb is misplaced Observe work.
             if executor == "external" and objective.startswith(acquisition_prefixes):
                 errors.append(f"action {action_id} collects facts and belongs to Observe")
-            relocation = any(
-                marker in action_text for marker in ("复制", "移动", "迁移", "copy ", "move ")
-            ) or (
-                "归档" in action_text
-                and any(marker in action_text for marker in ("截图", "screenshot", ".png"))
-            )
-            noncanonical_path = "./evidence" in action_text or " evidence/" in action_text
+            relocation = self._has_positive_screenshot_relocation_intent(action_text)
+            noncanonical_path = self._has_positive_noncanonical_path_intent(action_text)
             if (
                 has_screenshot_evidence
                 and (relocation or noncanonical_path)
@@ -1185,6 +1181,42 @@ class ConversationController:
                 )
         if errors:
             raise ValidationError(errors)
+
+    @staticmethod
+    def _has_positive_screenshot_relocation_intent(action_text: str) -> bool:
+        relocation_markers = ("复制", "移动", "迁移", "归档", "copy ", "move ", "archive ")
+        subject_markers = ("截图", "screenshot", ".png")
+        for clause in re.split(r"[。；;\n]", action_text.casefold()):
+            positions = [clause.find(marker) for marker in relocation_markers if marker in clause]
+            if not positions or not any(marker in clause for marker in subject_markers):
+                continue
+            prefix = clause[:min(positions)]
+            if ConversationController._contains_negation(prefix):
+                continue
+            return True
+        return False
+
+    @staticmethod
+    def _has_positive_noncanonical_path_intent(action_text: str) -> bool:
+        for clause in re.split(r"[。；;\n]", action_text.casefold()):
+            positions = [
+                clause.find(marker) for marker in ("./evidence", " evidence/")
+                if marker in clause
+            ]
+            if not positions:
+                continue
+            if ConversationController._contains_negation(clause[:min(positions)]):
+                continue
+            return True
+        return False
+
+    @staticmethod
+    def _contains_negation(text: str) -> bool:
+        stripped = text.rstrip()
+        return stripped.endswith(("不", "not")) or any(marker in text for marker in (
+            "不得", "不要", "禁止", "无需", "无须", "不需要", "不能",
+            "do not", "don't", "must not", "no need to", "without ",
+        ))
 
     def _validate_target_runtime(self, target: dict[str, Any]) -> None:
         target_text = json.dumps(target, ensure_ascii=False).casefold()

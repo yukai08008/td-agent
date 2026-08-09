@@ -703,6 +703,38 @@ def test_plan_cannot_relocate_existing_screenshot_evidence(repository):
         })
 
 
+def test_report_plan_that_forbids_screenshot_relocation_is_valid(repository):
+    controller = ConversationController.open(
+        repository, FakeStructuredAdapter([]), "ut_evidence_relocation_negation",
+    )
+    controller.service.context["observation"] = {
+        "facts": [{
+            "description": "网页截图已保存",
+            "source_type": "tool",
+            "source_ref": "trace/sessions/sess-demo/screenshots/observe-demo.png",
+        }],
+        "unknowns": [],
+    }
+
+    controller._validate_plan_runtime({
+        "actions": [{
+            "action_id": "report-zh-example-com",
+            "objective": "生成中文报告并引用 canonical 截图证据",
+            "instruction": (
+                "生成简短中文报告，引用截图路径 trace/sessions/sess-demo/"
+                "screenshots/observe-demo.png。不得复制、移动或重新归档截图，"
+                "不得执行任何 Observe 或外部变更。"
+            ),
+            "executor": "agent_response",
+            "assertions": [{
+                "description": "报告引用现有截图但不复制截图",
+                "required": True,
+                "check": {"type": "references_evidence"},
+            }],
+        }],
+    })
+
+
 def _prepare_bad_screenshot_archive_plan(controller):
     controller.service.start()
     controller.service.submit_target(_target())
