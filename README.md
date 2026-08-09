@@ -11,8 +11,7 @@ TD Agent is a proof of concept for long-running Agent tasks. A clear user requir
 Linux and macOS:
 
 ```bash
-curl -fL --connect-timeout 10 --retry 3 --progress-bar \
-  https://raw.githubusercontent.com/yukai08008/td-agent/v0.4.3/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash
 ```
 
 The installer installs [uv](https://docs.astral.sh/uv/) when needed, installs TD Agent as an isolated uv tool, and initializes machine-local configuration in `~/.config/td-agent/`.
@@ -28,8 +27,7 @@ At startup, the CLI checks that at least one model is enabled and has an API key
 ## Uninstall
 
 ```bash
-curl -fL --connect-timeout 10 --retry 3 --progress-bar \
-  https://raw.githubusercontent.com/yukai08008/td-agent/v0.4.3/install.sh | bash -s -- uninstall
+curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- uninstall
 ```
 
 Configuration and local runtime data are preserved.
@@ -43,8 +41,7 @@ toe-dac upgrade
 Or run the installer explicitly:
 
 ```bash
-curl -fL --connect-timeout 10 --retry 3 --progress-bar \
-  https://raw.githubusercontent.com/yukai08008/td-agent/v0.4.3/install.sh | bash -s -- update
+curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- update
 ```
 
 TD Agent checks the remote version at startup and only prints a notice when a newer version is available. The check uses a local cache and a short network timeout.
@@ -72,8 +69,7 @@ To permanently install an exact release:
 
 ```bash
 toe-dac upgrade --version 0.2.0
-curl -fL --connect-timeout 10 --retry 3 --progress-bar \
-  https://raw.githubusercontent.com/yukai08008/td-agent/v0.4.3/install.sh | bash -s -- install 0.2.0
+curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- install 0.2.0
 ```
 
 Tagged standalone execution is supported from `v0.2.0`. Use a separate `--data` directory when testing a release with an incompatible persisted-state format.
