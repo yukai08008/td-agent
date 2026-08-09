@@ -1,48 +1,96 @@
 # TD Agent
 
+[中文文档](README_zh.md)
+
 A persistent, interactive Agent CLI based on the TOE-DAC control protocol — Target, Observe, Estimate, Decide, Act, and Check.
 
 TD Agent is a proof of concept for long-running Agent tasks. A clear user requirement becomes a **User Thread**; every return to that requirement creates a new **Session**; planning and execution are represented by persistent, traceable **TD instances**.
 
-## Quick Start
+## One-line Install
 
-Requirements: Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+Linux and macOS:
 
 ```bash
-git clone https://github.com/yukai08008/td-agent.git
-cd td-agent
-
-cp .env.example .env.local
-chmod 600 .env.local
-# Edit .env.local and add at least one API key referenced by config/models.json.
-
-uv sync
-uv run toe-dac doctor
-uv run toe-dac new
+curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash
 ```
+
+The installer installs [uv](https://docs.astral.sh/uv/) when needed, installs TD Agent as an isolated uv tool, and initializes machine-local configuration in `~/.config/td-agent/`.
+
+Add at least one API key to `~/.config/td-agent/.env.local`, then run:
+
+```bash
+toe-dac doctor
+toe-dac new
+```
+
+## Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- uninstall
+```
+
+Configuration and local runtime data are preserved.
+
+## Update
+
+```bash
+toe-dac upgrade
+```
+
+Or run the installer explicitly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- update
+```
+
+TD Agent checks the remote version at startup and only prints a notice when a newer version is available. The check uses a local cache and a short network timeout.
+
+Control it in `.env.local`:
+
+```dotenv
+TOE_DAC_UPDATE_CHECK=true
+TOE_DAC_UPDATE_CHECK_INTERVAL=86400
+TOE_DAC_UPDATE_CHECK_TIMEOUT=1.5
+```
+
+Set `TOE_DAC_UPDATE_CHECK=false` to disable it.
+
+## Install with uv directly
+
+```bash
+uv tool install git+https://github.com/yukai08008/td-agent.git
+```
+
+When bypassing `install.sh`, create `~/.config/td-agent/models.json` and `~/.config/td-agent/.env.local` yourself from the repository templates.
 
 ## Usage
 
 ```bash
+# Show version and system information
+toe-dac --version
+
 # Create a User Thread for a new requirement and open its first Session
-uv run toe-dac new
+toe-dac new
 
 # Continue the latest unfinished requirement in a new Session
-uv run toe-dac
+toe-dac
 
 # Continue a specific User Thread
-uv run toe-dac continue --thread ut_xxxxxxxx
+toe-dac continue --thread ut_xxxxxxxx
 
 # Inspect Threads and Sessions
-uv run toe-dac threads
-uv run toe-dac sessions --thread ut_xxxxxxxx
+toe-dac threads
+toe-dac sessions --thread ut_xxxxxxxx
 
 # Check the effective local setup
-uv run toe-dac config
-uv run toe-dac doctor
+toe-dac config
+toe-dac doctor
+
+# Upgrade to the latest GitHub version
+toe-dac upgrade
 
 # Show all commands
-uv run toe-dac --help
+toe-dac --help
 ```
 
 Inside an interactive Session, use `/help` to list commands such as `/status`, `/history`, `/pause`, `/resume`, `/cancel`, and `/quit`.
@@ -61,6 +109,8 @@ process environment > .env.local > .env > .env.example
 - `config/models.json` contains model metadata and `apiKeyEnv` references, never inline API keys.
 
 Each machine should create its own `.env.local`. Do not copy GitHub credentials, SSH private keys, or local runtime data between machines.
+
+Source checkouts load configuration from the project directory. One-line installations load it from `~/.config/td-agent/`.
 
 ## How It Works
 
@@ -105,6 +155,7 @@ User Thread (one explicit requirement)
 
 ```text
 td-agent/
+├── install.sh             # One-line install, update, and uninstall
 ├── config/                 # Safe model registry and example config
 ├── docs/                   # Protocol, state-machine, and E2E designs
 ├── src/toe_dac/
@@ -116,11 +167,13 @@ td-agent/
 │   ├── storage.py          # Thread, Session, TD, message, and log storage
 │   ├── experience.py       # Exception-treatment experience ledger
 │   ├── llm_adapter.py      # Structured model adapter
+│   ├── update_check.py     # Cached remote version check
 │   ├── llm/                # Local OpenAI-compatible model clients
 │   └── e2e/                # Executable proof-of-concept scenarios
 ├── tests/
 ├── pyproject.toml
-└── README.md
+├── README.md
+└── README_zh.md
 ```
 
 ## E2E Scenarios
@@ -144,6 +197,11 @@ uv run toe-dac --data ./data report <run_id>
 ## Development
 
 ```bash
+git clone https://github.com/yukai08008/td-agent.git
+cd td-agent
+cp .env.example .env.local
+chmod 600 .env.local
+
 uv sync
 uv run pytest
 uv build

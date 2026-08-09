@@ -9,10 +9,32 @@ from .storage import TDRepository
 
 
 DEFAULT_MODEL_CONFIG = "config/models.json"
+APP_NAME = "td-agent"
+
+
+def user_config_dir() -> Path:
+    base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    return base / APP_NAME
+
+
+def default_data_dir() -> Path:
+    if (Path.cwd() / "pyproject.toml").exists() and (Path.cwd() / "src" / "toe_dac").is_dir():
+        return Path("data")
+    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+    return base / APP_NAME
 
 
 def model_config_path(value: str | None = None) -> Path:
-    return Path(value or os.environ.get("TOE_DAC_MODEL_CONFIG", DEFAULT_MODEL_CONFIG))
+    requested = value or os.environ.get("TOE_DAC_MODEL_CONFIG")
+    if requested:
+        return Path(requested).expanduser()
+    project_config = Path(DEFAULT_MODEL_CONFIG)
+    if project_config.exists():
+        return project_config
+    installed_config = user_config_dir() / "models.json"
+    if installed_config.exists():
+        return installed_config
+    return project_config
 
 
 def enabled_models(path: str | Path) -> list[dict[str, Any]]:

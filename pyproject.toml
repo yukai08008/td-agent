@@ -1,11 +1,11 @@
 [project]
 name = "toe-dac"
-version = "0.1.0"
-description = "Interactive TOE-DAC state-machine proof of concept"
+version = "0.2.0"
+description = "Persistent interactive agent CLI based on the TOE-DAC control protocol"
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.13",
-    "andy-state",
+    "pydantic>=2.0",
     "questionary>=2.1",
     "python-dotenv>=1.1",
     "rich>=13.0",
@@ -19,7 +19,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/toe_dac"]
+packages = ["src/toe_dac", "src/state_machine"]
 
 [tool.hatch.build]
 exclude = [
@@ -27,9 +27,6 @@ exclude = [
     "data/**",
     "work/**",
 ]
-
-[tool.uv.sources]
-andy-state = { path = "../../andy_state", editable = true }
 
 [dependency-groups]
 dev = [

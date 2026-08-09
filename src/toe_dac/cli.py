@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +14,17 @@ from state_machine import TransitionError
 from .e2e import CaseRegistry, E2ERunner
 from .conversation import ConversationController
 from .chat_ui import run_chat
-from .cli_settings import enabled_models, model_config_path, resolve_model, resolve_thread
-from .environment import load_environment
+from . import __version__
+from .cli_settings import (
+    default_data_dir,
+    enabled_models,
+    model_config_path,
+    resolve_model,
+    resolve_thread,
+    user_config_dir,
+)
+from .environment import find_project_root, load_environment
+from .update_check import notify_if_update_available
 from .llm_adapter import TOEDACLLMAdapter
 from .service import TDService
 from .states import TDState
@@ -105,7 +117,12 @@ def _advance_interactively(service: TDService) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="toe-dac")
-    parser.add_argument("--data", default=os.environ.get("TOE_DAC_DATA", "data"), help="data directory")
+    parser.add_argument("--version", action="store_true", help="show version and system information")
+    parser.add_argument(
+        "--data",
+        default=os.environ.get("TOE_DAC_DATA") or str(default_data_dir()),
+        help="data directory",
+    )
     subparsers = parser.add_subparsers(dest="command")
     create = subparsers.add_parser("new", help="create a new User Thread and start chatting")
     create.add_argument("--thread")
@@ -166,13 +183,27 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = subparsers.add_parser("doctor", help="check whether interactive chat can start")
     doctor.add_argument("--model", help="model id to validate")
     doctor.add_argument("--model-config", help="local model registry JSON")
+    subparsers.add_parser("upgrade", help="upgrade TD Agent to the latest GitHub version")
     return parser
 
 
 def main() -> None:
-    load_environment()
+    project_root = find_project_root()
+    if (project_root / "src" / "toe_dac").is_dir():
+        load_environment(project_root)
+    else:
+        load_environment(user_config_dir())
     parser = build_parser()
     args = parser.parse_args()
+    notify_if_update_available(__version__)
+    if args.version:
+        if sys.stdout.isatty():
+            print(f"TD Agent {__version__}")
+            print(f"Python   {sys.version.split()[0]}")
+            print(f"System   {platform.system()} {platform.release()} ({platform.machine()})")
+        else:
+            print(f"toe-dac {__version__}")
+        return
     repository = TDRepository(Path(args.data))
     command = args.command or "continue"
     if command == "debug-new":
@@ -301,6 +332,8 @@ def main() -> None:
         print("models:       " + (", ".join(str(item["id"]) for item in models) or "none"))
         print(f"model env:    {os.environ.get('TOE_DAC_MODEL', 'not set')}")
         print(f"thread env:   {os.environ.get('TOE_DAC_THREAD', 'not set')}")
+        print(f"update check: {os.environ.get('TOE_DAC_UPDATE_CHECK', 'true') or 'true'}")
+        print(f"check every:  {os.environ.get('TOE_DAC_UPDATE_CHECK_INTERVAL', '86400') or '86400'} seconds")
     elif command == "doctor":
         config_path = model_config_path(args.model_config)
         try:
@@ -311,6 +344,16 @@ def main() -> None:
         print(f"OK  model config  {config_path.resolve()}")
         print(f"OK  model         {model_id}")
         print(f"OK  data          {Path(args.data).resolve()}")
+    elif command == "upgrade":
+        print(f"Current version: {__version__}")
+        result = subprocess.run(
+            ["uv", "tool", "install", "--force", "git+https://github.com/yukai08008/td-agent.git"],
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise SystemExit(result.returncode)
+        print("Upgrade complete. Run `toe-dac --version` to verify the installed version.")
 
 
 if __name__ == "__main__":
