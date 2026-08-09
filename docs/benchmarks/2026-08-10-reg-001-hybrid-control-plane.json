@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-08-10T00:38:36+08:00",
+  "case_id": "REG-001",
+  "run_id": "run_a27a4bf9",
+  "user_thread_id": "ut_run_a27a4bf9",
+  "td_id": "td_b3cd4ab1",
+  "session_id": "sess-145d540e-20260810_003646",
+  "model_id": "deepseek-v4-flash",
+  "td_agent_version": "0.6.0",
+  "result": {
+    "td_state": "succeeded",
+    "human_interrupts": 0,
+    "actions": 1,
+    "structured_repairs": 0,
+    "wall_seconds": 110.1933,
+    "llm_phase_operations": 7,
+    "input_tokens": 21855,
+    "output_tokens": 11181,
+    "total_tokens": 33036
+  },
+  "phases_ms": {
+    "target": 23378.7,
+    "observe": 16575.4,
+    "estimate": 14614.6,
+    "decide": 20461.5,
+    "act": 9990.4,
+    "action_check": 9373.3,
+    "target_check": 15754.2
+  },
+  "baseline": {
+    "record": "2026-08-09-reg-001-deepseek-v4-flash.json",
+    "wall_seconds": 125.615,
+    "total_tokens": 33299
+  },
+  "notes": [
+    "All TOE-DAC stages retained model judgment.",
+    "The initial outer E2E status was a false negative caused by a stale example.com content marker; TD state and both checks succeeded."
+  ]
+}

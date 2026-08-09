@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from conftest import advance_to_deciding
@@ -31,6 +33,28 @@ def test_happy_path_keeps_action_and_target_checks_separate(
 
     service.check_target(PASS)
     assert service.state == TDState.SUCCEEDED
+    assert len(service.context["artifacts"]) == 1
+    artifact = service.repository.root / service.context["artifacts"][0]
+    assert artifact.exists()
+    assert json.loads(artifact.read_text(encoding="utf-8"))["type"] == "toe_dac_completion_report"
+
+
+def test_target_success_reuses_existing_material_artifact(
+    service, target, observation, estimate, two_action_plan,
+):
+    advance_to_deciding(service, target, observation, estimate)
+    two_action_plan["actions"] = [two_action_plan["actions"][0]]
+    service.submit_plan(two_action_plan)
+    artifact_ref = service.repository.write_artifact(service.context, "result.md", "done\n")
+    service.submit_action_result({"result": {"created": True}, "evidence_refs": [artifact_ref]})
+    service.check_action(PASS)
+
+    service.check_target(PASS)
+
+    assert service.state == TDState.SUCCEEDED
+    assert service.context["artifacts"] == [artifact_ref]
+    operations = service.repository.operation_log(service.context)
+    assert not any(item.get("operation") == "completion_artifact" for item in operations)
 
 
 def test_invalid_plan_cycle_is_rejected(service, target, observation, estimate, two_action_plan):
@@ -122,3 +146,50 @@ def test_failure_can_escalate_to_human_and_return(service):
     assert service.state == TDState.WAITING_HUMAN
     service.human_reply({"decision": "replan"})
     assert service.state == TDState.RECOVERING
+
+
+def test_estimate_can_request_another_observation_pass(service, target, observation):
+    service.start()
+    service.submit_target(target)
+    service.submit_observation(observation)
+
+    state = service.submit_estimate({
+        "verdict": "needs_observation",
+        "risks": ["missing official fact"],
+        "cost": {"max_calls": 1},
+        "information_gaps": ["official forecast body"],
+    })
+
+    assert state == TDState.OBSERVING
+    assert service.context["estimate"]["verdict"] == "needs_observation"
+    assert service.context["recovery"]["retry_count"] == 1
+
+
+def test_estimate_rejects_repeated_observe_without_new_facts(service, target, observation):
+    service.start()
+    service.submit_target(target)
+    service.submit_observation(observation)
+    service.submit_estimate({
+        "verdict": "needs_observation", "risks": [], "cost": {"max_calls": 1},
+        "information_gaps": ["more detail"],
+    })
+    service.submit_observation(observation)
+
+    with pytest.raises(ValidationError, match="no new facts"):
+        service.submit_estimate({
+            "verdict": "needs_observation", "risks": [], "cost": {"max_calls": 1},
+            "information_gaps": ["more detail"],
+        })
+
+
+def test_user_can_replan_from_external_executor_boundary(
+    service, target, observation, estimate, two_action_plan,
+):
+    advance_to_deciding(service, target, observation, estimate)
+    service.submit_plan(two_action_plan)
+
+    state = service.user_replan("不执行第一个外部动作")
+
+    assert state == TDState.DECIDING
+    assert service.context["plan"]["status"] == "revision_requested"
+    assert service.context["control"]["waiting_reason"] == "不执行第一个外部动作"

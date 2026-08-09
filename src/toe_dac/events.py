@@ -8,6 +8,7 @@ ConversationEventType = Literal[
     "assistant_message",
     "phase_started",
     "phase_completed",
+    "progress",
     "human_question",
     "executor_boundary",
     "recovery_required",

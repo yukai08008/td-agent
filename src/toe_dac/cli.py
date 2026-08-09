@@ -17,7 +17,10 @@ from .chat_ui import run_chat
 from . import __version__
 from .cli_settings import (
     default_data_dir,
+    default_log_dir,
+    app_home_dir,
     model_config_path,
+    resolve_model,
     resolve_thread,
     user_config_dir,
 )
@@ -32,8 +35,10 @@ from .releases import forwarded_version_args, package_spec
 from .update_check import notify_if_update_available
 from .llm_adapter import TOEDACLLMAdapter
 from .service import TDService
+from .runtime_content import initialize_runtime_content
 from .states import TDState
 from .storage import TDRepository, short_id
+from .storage_migration import StorageMigrator
 
 
 def _json_input(prompt: str) -> Any:
@@ -131,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--data",
         default=os.environ.get("TOE_DAC_DATA") or str(default_data_dir()),
-        help="data directory",
+        help=argparse.SUPPRESS,
     )
     subparsers = parser.add_subparsers(dest="command")
     create = subparsers.add_parser("new", help="create a new User Thread and start chatting")
@@ -159,7 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("case_id")
     run.add_argument("--mode", choices=["mock", "live"], default="mock")
     run.add_argument("--model")
-    run.add_argument("--model-config", default="config/models.json")
+    run.add_argument("--model-config", help="local model registry JSON")
 
     resume = subparsers.add_parser("resume", help="resume a waiting E2E run")
     resume.add_argument("run_id")
@@ -170,14 +175,23 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--json", action="store_true", dest="as_json")
 
     for name, help_text in (
-        ("continue", "start a new Session attached to an existing User Thread"),
+        ("continue", "reattach an existing persistent Session"),
         ("chat", "alias of continue"),
     ):
         continue_parser = subparsers.add_parser(name, help=help_text)
         continue_parser.add_argument("--thread", help="User Thread; defaults to the most recently used thread")
+        continue_parser.add_argument("--session", help="Session to reattach; defaults to the latest Session")
         continue_parser.add_argument("--model", help="enabled model id; defaults to the configured default model")
         continue_parser.add_argument("--model-config", help="local model registry JSON")
         continue_parser.add_argument("--retry-budget", type=int, default=3)
+
+    session_parser = subparsers.add_parser("session", help="manage persistent Sessions")
+    session_subparsers = session_parser.add_subparsers(dest="session_command", required=True)
+    session_new = session_subparsers.add_parser("new", help="start a new Session in an existing User Thread")
+    session_new.add_argument("--thread", help="User Thread; defaults to the most recently used thread")
+    session_new.add_argument("--model", help="enabled model id; defaults to the configured default model")
+    session_new.add_argument("--model-config", help="local model registry JSON")
+    session_new.add_argument("--retry-budget", type=int, default=3)
 
     thread_parser = subparsers.add_parser("thread", help="inspect User Threads")
     thread_subparsers = thread_parser.add_subparsers(dest="thread_command", required=True)
@@ -197,6 +211,14 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--model-config", help="local model registry JSON")
     upgrade = subparsers.add_parser("upgrade", help="install the latest or an exact GitHub release")
     upgrade.add_argument("--version", dest="upgrade_version", help="install an exact release, for example 0.2.0")
+    storage_parser = subparsers.add_parser("storage", help="inspect or migrate persistent storage")
+    storage_subparsers = storage_parser.add_subparsers(dest="storage_command", required=True)
+    storage_migrate = storage_subparsers.add_parser("migrate", help="migrate legacy threads to Storage V2")
+    storage_migrate.add_argument("--thread", help="migrate one legacy User Thread")
+    storage_migrate.add_argument(
+        "--execute", action="store_true",
+        help="perform the verified migration; without this flag only report a dry run",
+    )
     return parser
 
 
@@ -241,7 +263,8 @@ def main() -> None:
         else:
             print(f"toe-dac {__version__}")
         return
-    repository = TDRepository(Path(args.data))
+    initialize_runtime_content(app_home_dir())
+    repository = TDRepository(Path(args.data), access_log_dir=default_log_dir())
     command = args.command or "continue"
     if command == "debug-new":
         service = TDService.create(repository, args.thread, args.retry_budget)
@@ -252,11 +275,11 @@ def main() -> None:
         try:
             interact(service)
         finally:
-            repository.end_session(service.context)
+            repository.detach_session(service.context)
     elif command == "new":
         thread_id = args.thread or short_id("ut")
         if repository.thread_info(thread_id):
-            parser.error(f"User Thread already exists: {thread_id}; use chat --thread {thread_id} to resume it")
+            parser.error(f"User Thread already exists: {thread_id}; use continue --thread {thread_id}")
         config_path = model_config_path(args.model_config)
         try:
             model_id = ensure_model_ready(config_path, args.model, interactive=sys.stdin.isatty())
@@ -267,11 +290,11 @@ def main() -> None:
         run_chat(controller, model_id)
     elif command == "open":
         service = TDService.load(repository, args.thread, args.td)
-        repository.start_new_session(service.context)
+        repository.attach_session(service.context)
         try:
             interact(service)
         finally:
-            repository.end_session(service.context)
+            repository.detach_session(service.context)
     elif command == "show":
         _summary(TDService.load(repository, args.thread, args.td))
     elif command == "case":
@@ -287,20 +310,24 @@ def main() -> None:
                 "title": case.title,
                 "level": case.level,
                 "description": case.description,
+                "user_request": case.user_request,
                 "target": case.target,
                 "budgets": case.budgets,
+                "oracle": case.oracle,
                 "fixture": str(registry.fixture_root(case)),
             }, ensure_ascii=False, indent=2))
     elif command == "run":
         runner = E2ERunner(Path(args.data))
+        run_config = model_config_path(args.model_config) if args.mode == "live" else args.model_config
+        run_model = resolve_model(run_config, args.model) if args.mode == "live" else args.model
         try:
-            record = runner.run(args.case_id, args.mode, args.model, args.model_config)
+            record = runner.run(args.case_id, args.mode, run_model, run_config)
         except NotImplementedError as exc:
             parser.error(str(exc))
         print(json.dumps(record, ensure_ascii=False, indent=2))
         if record["status"] == "waiting_human":
             print(f"\n需要人工输入：{record['human_request']}")
-            print(f"继续：uv run toe-dac --data {args.data} resume {record['run_id']}")
+            print(f"继续：toe-dac resume {record['run_id']}")
     elif command == "resume":
         response = json.loads(args.response) if args.response else None
         record = E2ERunner(Path(args.data)).resume(args.run_id, response)
@@ -327,12 +354,46 @@ def main() -> None:
                 getattr(args, "model", None),
                 interactive=sys.stdin.isatty(),
             )
-            thread_id = resolve_thread(repository, getattr(args, "thread", None))
+            requested_session = getattr(args, "session", None)
+            if requested_session:
+                session_info = repository.find_session(requested_session)
+                if session_info is None:
+                    raise ValueError(f"unknown Session: {requested_session}")
+                thread_id = session_info["user_thread_id"]
+                requested_thread = getattr(args, "thread", None)
+                if requested_thread and requested_thread != thread_id:
+                    raise ValueError(
+                        f"Session {requested_session} belongs to {thread_id}, not {requested_thread}"
+                    )
+            else:
+                thread_id = resolve_thread(repository, getattr(args, "thread", None))
             adapter = TOEDACLLMAdapter(config_path, model_id)
         except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError) as exc:
             parser.error(str(exc))
         controller = ConversationController.open(
-            repository, adapter, thread_id, getattr(args, "retry_budget", 3),
+            repository,
+            adapter,
+            thread_id,
+            getattr(args, "retry_budget", 3),
+            session_id=requested_session,
+        )
+        run_chat(controller, model_id)
+    elif command == "session":
+        config_path = model_config_path(args.model_config)
+        try:
+            model_id = ensure_model_ready(config_path, args.model, interactive=sys.stdin.isatty())
+            thread_id = resolve_thread(repository, args.thread)
+            if repository.thread_info(thread_id) is None:
+                raise ValueError(f"unknown User Thread: {thread_id}")
+            adapter = TOEDACLLMAdapter(config_path, model_id)
+        except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(str(exc))
+        controller = ConversationController.open(
+            repository,
+            adapter,
+            thread_id,
+            args.retry_budget,
+            new_session=True,
         )
         run_chat(controller, model_id)
     elif command in {"thread", "threads"}:
@@ -365,6 +426,15 @@ def main() -> None:
                 f"{session['session_id']:<22} {session['status']:<11} "
                 f"{session.get('started_at', '')}"
             )
+    elif command == "storage":
+        try:
+            report = StorageMigrator(repository, __version__).migrate(
+                thread_id=args.thread,
+                dry_run=not args.execute,
+            )
+        except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(report, ensure_ascii=False, indent=2))
     elif command == "config":
         try:
             if args.init:

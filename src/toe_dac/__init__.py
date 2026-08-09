@@ -9,6 +9,6 @@ from .storage import TDRepository
 try:
     __version__ = version("toe-dac")
 except PackageNotFoundError:  # pragma: no cover - source tree without installation
-    __version__ = "0.4.3"
+    __version__ = "0.6.0"
 
 __all__ = ["TDRepository", "TDService", "TDState", "__version__"]

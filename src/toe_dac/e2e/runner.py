@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..context import utc_now
+from ..conversation import ConversationController
 from ..llm_adapter import TARGET_TOOL_SCHEMA, TOEDACLLMAdapter
 from ..service import TDService
 from ..states import TDState
@@ -38,7 +39,7 @@ class E2ERunner:
         case = self.registry.get(case_id)
         if mode not in {"mock", "live"}:
             raise ValueError(f"unsupported mode: {mode}")
-        if mode == "live" and case.case_id != "LIVE-001":
+        if mode == "live" and case.case_id not in {"LIVE-001", "REG-001"}:
             raise NotImplementedError(
                 "live mode currently supports LIVE-001 only; use --mode mock for this case"
             )
@@ -68,7 +69,16 @@ class E2ERunner:
         started = time.monotonic()
         try:
             if mode == "live":
-                asyncio.run(self._run_live_001_model(service, record, workspace, str(model_config_path), str(model_id)))
+                if case.case_id == "REG-001":
+                    asyncio.run(self._run_reg_001_live(
+                        service, record, str(model_config_path), str(model_id),
+                    ))
+                else:
+                    asyncio.run(self._run_live_001_model(
+                        service, record, workspace, str(model_config_path), str(model_id),
+                    ))
+            elif case.case_id == "REG-001":
+                self._run_reg_001_mock(service, record)
             elif case.case_id == "LIVE-001":
                 self._run_live_001_until_human(service, record)
             elif case.case_id == "LIVE-002":
@@ -86,7 +96,7 @@ class E2ERunner:
             record["td_state"] = service.state.value
             record["updated_at"] = utc_now()
             self._save_run(record)
-            self.repository.end_session(service.context)
+            self.repository.detach_session(service.context)
         return record
 
     def resume(self, run_id: str, human_response: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -100,7 +110,7 @@ class E2ERunner:
             "acceptance": "README 包含安装、运行和测试说明",
         }
         service = TDService.load(self.repository, record["user_thread_id"], record["td_id"])
-        self.repository.start_new_session(service.context)
+        self.repository.attach_session(service.context)
         workspace = Path(record["workspace"])
         started = time.monotonic()
         try:
@@ -129,7 +139,7 @@ class E2ERunner:
             record["td_state"] = service.state.value
             record["updated_at"] = utc_now()
             self._save_run(record)
-            self.repository.end_session(service.context)
+            self.repository.detach_session(service.context)
         return record
 
     def report(self, run_id: str) -> dict[str, Any]:
@@ -162,6 +172,127 @@ class E2ERunner:
         record["status"] = "waiting_human"
         record["metrics"]["human_interrupts"] = 1
         record["human_request"] = service.context["control"]["human_question"]
+
+    def _run_reg_001_mock(self, service: TDService, record: dict[str, Any]) -> None:
+        case = self.registry.get("REG-001")
+        service.start()
+        service.submit_target(case.target)
+        screenshot_dir = self.repository.session_evidence_dir(service.context) / "screenshots"
+        screenshot_dir.mkdir(parents=True, exist_ok=True)
+        screenshot = screenshot_dir / "observe-example-domain.png"
+        screenshot.write_bytes(b"\x89PNG\r\n\x1a\n" + b"TOE-DAC REG-001 deterministic screenshot evidence")
+        service.submit_observation({
+            "facts": [
+                {"description": "页面 URL 为 https://example.com", "source_type": "browser", "source_ref": str(screenshot)},
+                {"description": "页面标题为 Example Domain", "source_type": "browser", "source_ref": str(screenshot)},
+                {"description": "正文说明该域名用于文档中的示例，无需事先协调或申请许可", "source_type": "browser", "source_ref": str(screenshot)},
+            ],
+            "unknowns": [],
+        })
+        service.submit_estimate({
+            "verdict": "feasible", "risks": [],
+            "cost": {"max_actions": 1}, "information_gaps": [],
+        })
+        service.submit_plan({
+            "plan_id": "plan_reg_001", "version": 1,
+            "actions": [{
+                "action_id": "a_report", "objective": "向用户输出简短中文网页报告",
+                "depends_on": [], "instruction": "仅依据已保存的网页事实和截图生成报告",
+                "executor": "agent_response",
+                "assertions": [
+                    {"description": "报告包含标题和主要内容", "required": True},
+                    {"description": "截图证据存在", "required": True},
+                ],
+                "max_attempts": 1,
+            }],
+        })
+        report_text = (
+            "# Example.com 网页简报\n\n"
+            "页面标题为 **Example Domain**。主要内容说明该域名专门用于文档中的示例，"
+            "可以直接用于说明材料，无需事先协调或申请许可。\n\n"
+            f"截图证据：`{screenshot.name}`\n"
+        )
+        report_ref = self.repository.write_artifact(service.context, "example-com-report.md", report_text)
+        service.context["artifacts"].append(report_ref)
+        service.submit_action_result({"result": {
+            "executor": "agent_response", "content": report_text,
+            "artifact_ref": report_ref, "screenshot_ref": str(screenshot),
+        }})
+        record["metrics"]["actions"] = 1
+        service.check_action(PASS)
+        service.check_target([
+            {"assertion_id": "title", "required": True, "passed": "Example Domain" in report_text},
+            {"assertion_id": "content", "required": True, "passed": "文档中的示例" in report_text},
+            {"assertion_id": "report", "required": True, "passed": bool(report_text.strip())},
+            {"assertion_id": "screenshot", "required": True, "passed": self._valid_png(screenshot)},
+        ])
+        record["oracle"] = self._reg_001_oracle(service, screenshot)
+        record["status"] = "succeeded" if all(record["oracle"].values()) else "failed"
+        record["artifacts"] = {"report": report_ref, "screenshot": str(screenshot)}
+
+    async def _run_reg_001_live(
+        self,
+        service: TDService,
+        record: dict[str, Any],
+        model_config_path: str,
+        model_id: str,
+    ) -> None:
+        case = self.registry.get("REG-001")
+        adapter = TOEDACLLMAdapter(model_config_path, model_id)
+        controller = ConversationController(self.repository, adapter, service)
+        events = await controller.handle_user_events(case.user_request)
+        operations = self.repository.operation_log(service.context)
+        record["metrics"]["llm_calls"] = len([
+            item for item in operations if item.get("operation") == "generate_structured"
+        ])
+        record["metrics"]["actions"] = len(service.context.get("execution", {}).get("attempts", []))
+        record["metrics"]["recoveries"] = int(service.context["recovery"].get("retry_count", 0)) + sum(
+            int(value) for value in service.context["recovery"].get("runtime_retry_counts", {}).values()
+        )
+        record["metrics"]["human_interrupts"] = len([
+            event for event in events if event.type == "human_question"
+        ])
+        screenshots = sorted((self.repository.session_evidence_dir(service.context) / "screenshots").glob("*.png"))
+        screenshot = screenshots[-1] if screenshots else None
+        record["oracle"] = self._reg_001_oracle(service, screenshot)
+        if service.state == TDState.WAITING_HUMAN:
+            record["status"] = "waiting_human"
+            record["human_request"] = service.context["control"].get("human_question")
+        else:
+            record["status"] = "succeeded" if all(record["oracle"].values()) else "failed"
+        record["artifacts"] = {
+            "report_refs": list(service.context.get("artifacts", [])),
+            "screenshot": str(screenshot) if screenshot else None,
+        }
+
+    def _reg_001_oracle(self, service: TDService, screenshot: Path | None) -> dict[str, bool]:
+        observation_text = json.dumps(service.context.get("observation", {}), ensure_ascii=False)
+        artifact_text = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for reference in service.context.get("artifacts", [])
+            if (path := (Path(str(reference)) if Path(str(reference)).is_absolute()
+                        else self.repository.root / str(reference))).is_file()
+        )
+        return {
+            "terminal_succeeded": service.state == TDState.SUCCEEDED,
+            "title_observed": "Example Domain" in observation_text,
+            "main_content_observed": any(
+                marker in observation_text.lower()
+                for marker in ("documentation examples", "illustrative examples", "示例", "文档")
+            ),
+            "chinese_report_created": bool(artifact_text) and any(
+                "\u4e00" <= char <= "\u9fff" for char in artifact_text
+            ),
+            "valid_png_screenshot": self._valid_png(screenshot),
+            "no_human_wait": service.state != TDState.WAITING_HUMAN,
+        }
+
+    @staticmethod
+    def _valid_png(path: Path | None) -> bool:
+        return bool(
+            path and path.is_file() and path.stat().st_size > 8
+            and path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+        )
 
     async def _run_live_001_model(
         self,

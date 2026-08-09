@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
+
+
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """Compatibility name; persisted timestamps use explicit Asia/Shanghai offset."""
+    return datetime.now(SHANGHAI_TZ).isoformat()
 
 
 def new_context(user_thread_id: str, td_id: str, session_id: str, retry_budget: int = 3) -> dict[str, Any]:
@@ -23,6 +28,7 @@ def new_context(user_thread_id: str, td_id: str, session_id: str, retry_budget: 
         "target": {},
         "target_revisions": [],
         "observation": {},
+        "observation_history": [],
         "estimate": {},
         "plan": {},
         "plan_history": [],
@@ -32,9 +38,11 @@ def new_context(user_thread_id: str, td_id: str, session_id: str, retry_budget: 
             "completed_action_ids": [],
         },
         "checks": {"action_checks": [], "target_check": None},
+        "evidence_registry": [],
         "recovery": {
             "retry_count": 0,
             "retry_budget": retry_budget,
+            "runtime_retry_counts": {},
             "last_failure": None,
             "decision": None,
             "active_experience_id": None,

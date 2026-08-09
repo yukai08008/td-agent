@@ -123,9 +123,10 @@ wheels = [
 
 [[package]]
 name = "toe-dac"
-version = "0.4.3"
+version = "0.6.0"
 source = { editable = "." }
 dependencies = [
+    { name = "prompt-toolkit" },
     { name = "questionary" },
     { name = "rich" },
 ]
@@ -137,6 +138,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "prompt-toolkit", specifier = ">=3.0" },
     { name = "questionary", specifier = ">=2.1" },
     { name = "rich", specifier = ">=13.0" },
 ]

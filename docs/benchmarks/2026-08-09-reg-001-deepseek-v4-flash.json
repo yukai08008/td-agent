@@ -1,0 +1,71 @@
+{
+  "schema_version": "1.0",
+  "recorded_at": "2026-08-09T23:57:27+08:00",
+  "case_id": "REG-001",
+  "case_title": "Example.com 网页取证与中文报告",
+  "user_request": "访问 https://example.com，确认页面标题和主要内容，生成一份简短中文报告，并保留网页截图作为证据。",
+  "model": {
+    "config_id": "deepseek-v4-flash",
+    "returned_id": "deepseekv4flash"
+  },
+  "environment": {
+    "td_agent_version": "0.5.0",
+    "git_commit": "f850629",
+    "git_worktree_clean": false,
+    "os": "macOS 26.3 arm64",
+    "python": "3.14.3",
+    "agent_browser": "0.26.0",
+    "timezone": "Asia/Shanghai"
+  },
+  "toe_dac": {
+    "user_thread_id": "ut_4fe580c1",
+    "session_id": "sess-eef9d2ac-20260809_234417",
+    "td_id": "td_ec817dbb",
+    "started_at": "2026-08-09T23:44:23.272441+08:00",
+    "completed_at": "2026-08-09T23:46:28.887815+08:00",
+    "wall_seconds": 125.615,
+    "session_attach_to_complete_seconds": 131.124,
+    "terminal_state": "succeeded",
+    "structured_phase_operations": 8,
+    "recorded_model_duration_seconds": 125.539,
+    "usage": {
+      "input_tokens": 18543,
+      "output_tokens": 14756,
+      "total_tokens": 33299
+    },
+    "recovery_count": 1,
+    "structured_repair_count": 1,
+    "human_interrupts": 0,
+    "action_count": 1,
+    "phases": [
+      {"phase": "target", "seconds": 33.070},
+      {"phase": "observe", "seconds": 42.169, "browser_seconds": 4.518, "repaired": true},
+      {"phase": "estimate", "seconds": 13.803},
+      {"phase": "decide", "seconds": 7.953},
+      {"phase": "act", "seconds": 5.302},
+      {"phase": "action_check", "seconds": 9.981},
+      {"phase": "target_check", "seconds": 13.314}
+    ],
+    "artifacts": {
+      "report_bytes": 687,
+      "screenshot_bytes": 16102,
+      "screenshot_format": "png"
+    }
+  },
+  "direct": {
+    "method": "agent-browser observe and screenshot, followed by one direct model generation",
+    "browser_seconds": 4.712,
+    "model_samples": [
+      {"seconds": 1.959, "input_tokens": 200, "output_tokens": 129, "total_tokens": 329},
+      {"seconds": 1.627, "input_tokens": 179, "output_tokens": 90, "total_tokens": 269},
+      {"seconds": 1.801, "input_tokens": 179, "output_tokens": 128, "total_tokens": 307}
+    ],
+    "model_median_seconds": 1.801,
+    "estimated_full_median_seconds": 6.513,
+    "estimated_full_range_seconds": [6.339, 6.671]
+  },
+  "comparison": {
+    "toe_dac_to_direct_median_wall_ratio": 19.286,
+    "toe_dac_to_direct_token_ratio_range": [101.213, 123.788]
+  }
+}

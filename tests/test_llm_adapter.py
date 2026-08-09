@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -40,6 +41,88 @@ def test_parse_rejects_unstructured_content():
     )
     with pytest.raises(LLMOutputError):
         AndybotLLMAdapter._parse(response, "submit_target")
+
+
+def _tool_response(arguments, model_id="deepseek-v4-flash"):
+    return SimpleNamespace(
+        tool_calls=[SimpleNamespace(function={
+            "name": "submit_target",
+            "arguments": arguments,
+        })],
+        content=None,
+        model_id=model_id,
+        usage={"input": 10, "output": 5},
+        finish_reason="tool_calls",
+    )
+
+
+def test_malformed_tool_arguments_are_repaired_once():
+    adapter = object.__new__(TOEDACLLMAdapter)
+    adapter._call = AsyncMock(side_effect=[
+        _tool_response('{"status":"accepted" "reason":"missing comma"}'),
+        _tool_response('{"status":"needs_human","reason":"ambiguous","question":"scope?"}'),
+    ])
+
+    result = __import__("asyncio").run(adapter.generate_structured(
+        phase="target",
+        system_prompt="target",
+        payload={"conversation": []},
+        tool_name="submit_target",
+        schema={"type": "object"},
+    ))
+
+    assert result.repaired is True
+    assert result.data["status"] == "needs_human"
+    assert [item["status"] for item in result.repair_evidence] == ["failed", "succeeded"]
+    assert adapter._call.await_count == 2
+
+
+def test_repeated_malformed_tool_arguments_preserve_both_attempts():
+    adapter = object.__new__(TOEDACLLMAdapter)
+    adapter._call = AsyncMock(side_effect=[
+        _tool_response('{"status":"accepted" "reason":"first"}'),
+        _tool_response('{"status":"accepted" "reason":"second"}'),
+    ])
+
+    with pytest.raises(LLMOutputError) as caught:
+        __import__("asyncio").run(adapter.generate_structured(
+            phase="target",
+            system_prompt="target",
+            payload={"conversation": []},
+            tool_name="submit_target",
+            schema={"type": "object"},
+        ))
+
+    assert [item["stage"] for item in caught.value.attempts] == ["initial", "repair"]
+    assert all(item["status"] == "failed" for item in caught.value.attempts)
+
+
+def test_model_transport_failure_is_normalized_for_toe_dac_recovery():
+    adapter = object.__new__(TOEDACLLMAdapter)
+    adapter.client = SimpleNamespace(generate=AsyncMock(side_effect=ConnectionError("stream closed")))
+    adapter.model_config = {"id": "test-model"}
+    adapter.runtime_snapshot = SimpleNamespace(
+        skills=[], available_skills=[],
+        render=lambda system_prompt, phase: system_prompt,
+    )
+    adapter.llm_module = SimpleNamespace(
+        Message=lambda **kwargs: kwargs,
+        MessageRole=SimpleNamespace(USER="user", SYSTEM="system"),
+    )
+    adapter.skill_runtime = SimpleNamespace(tool_definitions=lambda names, phase: [])
+    adapter._last_skill_events = []
+    progress = []
+
+    with pytest.raises(LLMOutputError) as caught:
+        __import__("asyncio").run(adapter._call(
+            "target", {"conversation": []}, "submit_target", {"type": "object"},
+            phase="target", progress_callback=progress.append,
+        ))
+
+    assert "ConnectionError" in str(caught.value)
+    assert caught.value.model_id == "test-model"
+    assert caught.value.attempts[0]["stage"] == "model_call"
+    assert progress[-1]["type"] == "model_call_failed"
 
 
 def test_local_model_config_creates_migrated_client_without_network(tmp_path):

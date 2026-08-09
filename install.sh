@@ -2,11 +2,12 @@
 set -euo pipefail
 
 REPO="yukai08008/td-agent"
-LATEST_VERSION="0.4.3"
+LATEST_VERSION="0.6.0"
 TOOL_NAME="toe-dac"
 BIN_NAME="toe-dac"
 INSTALL_DIR="${HOME}/.local/bin"
 CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/td-agent"
+APP_HOME="${TD_AGENT_HOME:-${HOME}/.td-agent}"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
 PACKAGE_SPEC="git+https://github.com/${REPO}.git"
 PACKAGE_FALLBACK="git+https://github.com/${REPO}.git"
@@ -157,6 +158,14 @@ ensure_config() {
   fi
 }
 
+ensure_runtime_dirs() {
+  mkdir -p "${APP_HOME}/data" "${APP_HOME}/logs" "${APP_HOME}/credentials"
+  chmod 700 "${APP_HOME}" "${APP_HOME}/credentials"
+  info "Runtime data: ${APP_HOME}/data"
+  info "Access logs: ${APP_HOME}/logs"
+  info "Credentials: ${APP_HOME}/credentials"
+}
+
 install_or_update() {
   local action="$1"
   info "${action} TD Agent ${RELEASE_LABEL} from github.com/${REPO}..."
@@ -169,6 +178,7 @@ install_or_update() {
     UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-30}" run_uv_install "$PACKAGE_FALLBACK"
   fi
   ensure_config
+  ensure_runtime_dirs
   if command -v "$BIN_NAME" >/dev/null 2>&1; then
     info "TD Agent is ready: $($BIN_NAME --version | sed -n '1p')"
     info "Run '${BIN_NAME}'. It will guide model configuration when required."
@@ -184,7 +194,9 @@ uninstall() {
     uv tool uninstall "$TOOL_NAME" 2>/dev/null || true
   fi
   rm -f "${INSTALL_DIR}/${BIN_NAME}"
-  info "TD Agent uninstalled. Configuration was preserved at ${CONFIG_DIR}."
+  info "TD Agent uninstalled. Configuration and runtime data were preserved."
+  info "Configuration: ${CONFIG_DIR}"
+  info "Runtime data: ${APP_HOME}"
 }
 
 main() {

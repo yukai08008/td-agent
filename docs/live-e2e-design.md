@@ -1,5 +1,8 @@
 # TOE-DAC + Andybot LLM 实测 E2E 设计
 
+稳定的发布回归编号、全局不变量和统一 Oracle 以
+[TOE-DAC 标准回归测试](standard-regression-tests.md) 为准；本文保留能力探索和故障注入场景设计。
+
 ## 1. 实测目标
 
 Live E2E 不是验证“模型能否回答问题”，而是验证：
@@ -44,7 +47,8 @@ Andybot LLM Adapter
   └── usage、model_id、latency 和错误回传
 ```
 
-模型配置使用本项目的 `config/models.json`。该文件包含本地 API Key，必须被 Git 忽略并保持仅当前用户可读写；日志只保存 `model_id`、配置指纹和调用统计。
+模型元数据使用 `config/models.json`，只保存 `apiKeyEnv` 引用，不允许内联 API Key。实际密钥从
+`~/.config/td-agent/.env.local` 加载，该文件不进入 Git；日志只保存 `model_id`、配置指纹和调用统计。
 
 ## 3. 阶段输出协议
 

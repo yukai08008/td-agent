@@ -62,7 +62,7 @@ The installed CLI runs normally by default. To temporarily run an exact tagged r
 
 ```bash
 toe-dac --use-version 0.2.0 --version
-toe-dac --use-version 0.2.0 --data ~/.local/share/td-agent-v0.2 new
+TOE_DAC_DATA=~/.td-agent/versions/v0.2/data toe-dac --use-version 0.2.0 new
 ```
 
 To permanently install an exact release:
@@ -72,11 +72,13 @@ toe-dac upgrade --version 0.2.0
 curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- install 0.2.0
 ```
 
-Tagged standalone execution is supported from `v0.2.0`. Use a separate `--data` directory when testing a release with an incompatible persisted-state format.
+Tagged standalone execution is supported from `v0.2.0`. Set `TOE_DAC_DATA` only when testing a release with an incompatible persisted-state format.
 
 ## Current release
 
-The current stable release is [v0.4.3](https://github.com/yukai08008/td-agent/releases/tag/v0.4.3), with visible package sources, dependencies, cache paths, uv stage output, wait heartbeats, guided model setup, and persistent interaction.
+The current source version is `v0.6.0`. Every TOE-DAC stage retains model judgment, while a deterministic control plane handles canonical file persistence, evidence registration, protocol normalization, hard checks, and bounded runtime recovery.
+
+See [模型判断与确定性控制边界](docs/model-control-boundary.md) for the stage-by-stage contract.
 
 [Complete version record](versions.md) · [GitHub Releases](https://github.com/yukai08008/td-agent/releases)
 
@@ -97,11 +99,17 @@ toe-dac --version
 # Create a User Thread for a new requirement and open its first Session
 toe-dac new
 
-# Continue the latest unfinished requirement in a new Session
+# Reattach the latest persistent Session
 toe-dac
 
-# Continue a specific User Thread
+# Reattach the latest Session in a specific User Thread
 toe-dac continue --thread ut_xxxxxxxx
+
+# Reattach an exact Session
+toe-dac continue --session ss_xxxxxxxx
+
+# Explicitly start another Session for the same requirement
+toe-dac session new --thread ut_xxxxxxxx
 
 # Inspect Threads and Sessions
 toe-dac threads
@@ -119,7 +127,16 @@ toe-dac upgrade
 toe-dac --help
 ```
 
-Inside an interactive Session, use `/help` to list commands such as `/status`, `/history`, `/pause`, `/resume`, `/cancel`, and `/quit`.
+Inside an interactive Session, use `/help` to list commands such as `/status`, `/why`, `/show`,
+`/continue`, `/reobserve`, `/replan`, `/history`, `/pause`, `/resume`, `/cancel`, and `/quit`.
+Read-only control commands never advance the TD. `/quit` only detaches the CLI; it does not end the Session.
+
+## Skills and persona
+
+Every Session attachment initially loads only `~/.td-agent/skills/index.md` and the active blue/green system
+prompt from `~/.td-agent/persona/active.json`. A relevant Claude-style `SKILL.md` is loaded progressively;
+allow-listed skill tools are exposed only in their declared phases and within a per-phase call budget.
+Existing files are never overwritten by installation or initialization.
 
 ## Configuration
 
@@ -161,21 +178,28 @@ The model proposes structured outputs; deterministic validation and the state ma
 
 ```text
 User Thread (one explicit requirement)
-├── messages.jsonl
-├── sessions/
-│   ├── ss_xxxxxxxx.json
-│   └── ss_xxxxxxxx.json
-└── td/
-    └── td_xxxxxxxx/
-        ├── state.json
-        ├── event.jsonl
-        └── operation.jsonl
+├── meta.json
+├── state.json
+├── logs/
+│   ├── event.jsonl
+│   └── opr.jsonl
+├── trace/sessions/
+│   └── sess-xxxxxxxx-YYYYMMDD_HHMMSS/
+│       ├── session.json
+│       ├── messages.jsonl
+│       ├── evidence.jsonl
+│       └── screenshots/
+├── artifacts/<td_id>/
+└── td/<td_id>/state.json
 ```
 
 - A new requirement creates a new User Thread.
 - Reopening a requirement creates a Session attached to that Thread.
 - TD instances describe the requirement's planning and execution hierarchy.
+- `/evidence` only opens the current Session directory under `trace/sessions/`; it never creates, copies, aggregates, or refreshes evidence.
 - Reaching a terminal TD state never silently turns the Thread into a container for another requirement.
+- `toe-dac storage migrate` performs a read-only migration preview; add `--execute` only after reviewing it.
+- Legacy `data/threads/` remains readable and is retained after a verified migration.
 
 ## Project Structure
 
@@ -204,20 +228,29 @@ td-agent/
 
 ## E2E Scenarios
 
+标准回归规范见 [docs/standard-regression-tests.md](docs/standard-regression-tests.md)。
+性能对比基线见 [docs/benchmarks/](docs/benchmarks/README.md)。
+
 ```bash
 # List executable scenarios
 uv run toe-dac case list
 
 # Run deterministic mock scenarios
-uv run toe-dac --data ./data run LIVE-001 --mode mock
-uv run toe-dac --data ./data run LIVE-002 --mode mock
-uv run toe-dac --data ./data run LIVE-006 --mode mock
+uv run toe-dac run REG-001 --mode mock
+TOE_DAC_DATA=./data uv run toe-dac run LIVE-001 --mode mock
+TOE_DAC_DATA=./data uv run toe-dac run LIVE-002 --mode mock
+TOE_DAC_DATA=./data uv run toe-dac run LIVE-006 --mode mock
 
 # Resume a scenario waiting for human input
-uv run toe-dac --data ./data resume <run_id>
+TOE_DAC_DATA=./data uv run toe-dac resume <run_id>
 
 # Inspect its report
-uv run toe-dac --data ./data report <run_id>
+TOE_DAC_DATA=./data uv run toe-dac report <run_id>
+
+# Run the standard browser/model regression before release
+toe-dac run REG-001 --mode live \
+  --model deepseek-v4-flash \
+  --model-config ~/.config/td-agent/models.json
 ```
 
 ## Development
@@ -235,6 +268,6 @@ uv build
 
 ## Current Scope
 
-The POC currently covers persistent Threads and Sessions, the TOE-DAC state chain, deterministic structured validation, Target repair, Action/Target checks, recovery budgets, human interruption, and exception experience tracking.
+The POC currently covers persistent Threads and Sessions, the TOE-DAC state chain, deterministic structured validation, Target repair, a bounded `agent_response` Executor, Action/Target checks, recovery budgets, human interruption, progressive skills, and exception experience tracking.
 
-The restricted Action Executor, parent/child TD orchestration, evidence capture, and semantic experience retrieval are still under development. The interactive flow therefore stops at the Executor boundary after a Plan is accepted.
+Executors that mutate files, run commands, or operate remote systems remain restricted and stop at an explicit boundary. Parent/child TD orchestration, richer evidence capture, and semantic experience retrieval are still under development.

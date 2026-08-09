@@ -12,16 +12,25 @@ DEFAULT_MODEL_CONFIG = "config/models.json"
 APP_NAME = "td-agent"
 
 
+def app_home_dir() -> Path:
+    return Path(os.environ.get("TD_AGENT_HOME", Path.home() / ".td-agent")).expanduser()
+
+
 def user_config_dir() -> Path:
     base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     return base / APP_NAME
 
 
 def default_data_dir() -> Path:
-    if (Path.cwd() / "pyproject.toml").exists() and (Path.cwd() / "src" / "toe_dac").is_dir():
-        return Path("data")
-    base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    return base / APP_NAME
+    return app_home_dir() / "data"
+
+
+def default_log_dir() -> Path:
+    return Path(os.environ.get("TOE_DAC_LOG_DIR", app_home_dir() / "logs")).expanduser()
+
+
+def credentials_dir() -> Path:
+    return app_home_dir() / "credentials"
 
 
 def model_config_path(value: str | None = None) -> Path:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,8 @@ class CaseDefinition:
     fixture_name: str
     target: dict[str, Any]
     budgets: dict[str, int]
+    user_request: str = ""
+    oracle: dict[str, Any] = field(default_factory=dict)
 
 
 class CaseRegistry:
@@ -25,6 +27,51 @@ class CaseRegistry:
             "max_wall_seconds": 300,
         }
         self._cases = {
+            "REG-001": CaseDefinition(
+                case_id="REG-001",
+                title="Example.com 网页取证与中文报告",
+                level="L1",
+                description=(
+                    "标准只读 Web 回归：验证一次输入可完成浏览、事实提取、截图取证、"
+                    "中文报告、双层检查和终态持久化。"
+                ),
+                fixture_name="web_report",
+                user_request=(
+                    "访问 https://example.com，确认页面标题和主要内容，"
+                    "生成一份简短中文报告，并保留网页截图作为证据。"
+                ),
+                target={
+                    "positive": [
+                        "访问 https://example.com 并确认页面标题",
+                        "确认页面主要内容并生成简短中文报告",
+                        "保存真实网页截图作为证据",
+                    ],
+                    "negative": [
+                        "不得猜测网页内容", "不得伪造截图", "不得修改网页或执行其他外部写操作",
+                    ],
+                    "acceptance_criteria": [
+                        {"criterion_id": "tc_title", "description": "报告确认标题为 Example Domain", "required": True},
+                        {"criterion_id": "tc_content", "description": "报告概括页面的示例域名用途", "required": True},
+                        {"criterion_id": "tc_report", "description": "产出简短中文报告", "required": True},
+                        {"criterion_id": "tc_screenshot", "description": "存在有效 PNG 网页截图证据", "required": True},
+                    ],
+                },
+                budgets={
+                    **common_budget,
+                    "max_llm_calls": 12,
+                    "max_actions": 2,
+                    "max_wall_seconds": 180,
+                },
+                oracle={
+                    "expected_url": "https://example.com",
+                    "expected_title": "Example Domain",
+                    "content_markers": ["documentation examples", "illustrative examples", "示例", "文档"],
+                    "report_language": "zh-CN",
+                    "screenshot_format": "png",
+                    "human_interrupts": 0,
+                    "terminal_state": "succeeded",
+                },
+            ),
             "LIVE-001": CaseDefinition(
                 case_id="LIVE-001",
                 title="模糊需求请求人工补充",

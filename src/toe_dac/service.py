@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 from typing import Any, Callable
 
 from state_machine import Machine, TransitionError
@@ -75,7 +77,17 @@ class TDService:
                 self._finish_active_treatment(True, {"target_revision": revision})
             self._clear_waiting()
 
-        return self._transition("target_accepted", mutation, {"target_revision": len(self.context["target_revisions"]) + 1})
+        state = self._transition(
+            "target_accepted", mutation,
+            {"target_revision": len(self.context["target_revisions"]) + 1},
+        )
+        positives = self.context["target"].get("positive") or []
+        if positives:
+            summary = str(positives[0])
+            self.repository.update_thread_meta(
+                self.context, {"title": summary, "target_summary": summary},
+            )
+        return state
 
     def target_needs_input(self, question: str, reason: str) -> TDState:
         self._require(TDState.TARGETING)
@@ -98,6 +110,9 @@ class TDService:
             TDState.OBSERVING: "observe_needs_input",
             TDState.ESTIMATING: "estimate_needs_input",
             TDState.DECIDING: "decide_needs_input",
+            TDState.ACTING: "act_needs_input",
+            TDState.CHECKING_ACTION: "action_check_needs_input",
+            TDState.CHECKING_TARGET: "target_check_needs_input",
         }
         event = event_by_state.get(self.state)
         if event is None:
@@ -120,15 +135,174 @@ class TDService:
         self._require(TDState.TARGETING)
         return self._fail("target", cause, message, "target_failed")
 
+    def record_resolved_exception(
+        self,
+        phase: str,
+        cause: str,
+        message: str,
+        *,
+        strategy: str,
+        details: dict[str, Any] | None = None,
+    ) -> str:
+        """Persist an exception that was handled without a state transition."""
+        experience_id = self.experience.observe_exception(
+            scope_id=self._scope_id,
+            user_thread_id=self.context["user_thread_id"],
+            td_id=self.context["td_id"],
+            session_id=self.context["session_id"],
+            exception={
+                "phase": phase,
+                "cause": cause,
+                "message": message,
+                "target_summary": " ".join(self.context.get("target", {}).get("positive", [])),
+                "action_summary": "",
+                "occurred_at": utc_now(),
+            },
+        )
+        self.experience.treatment_started(experience_id, self._scope_id, strategy)
+        self.experience.treatment_finished(experience_id, self._scope_id, True, details or {})
+        return experience_id
+
+    def record_active_treatment(
+        self,
+        strategy: str,
+        success: bool,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Record an attempted treatment while retaining the failure for recovery."""
+        experience_id = self.context["recovery"].get("active_experience_id")
+        if not experience_id:
+            return
+        self.experience.treatment_started(experience_id, self._scope_id, strategy)
+        self.experience.treatment_finished(
+            experience_id, self._scope_id, success, details or {},
+        )
+
+    def begin_runtime_treatment(
+        self,
+        phase: str,
+        cause: str,
+        message: str,
+        *,
+        strategy: str,
+        details: dict[str, Any] | None = None,
+    ) -> str:
+        """Persist a recoverable runtime failure without forcing a state transition."""
+        experience_id = self._observe_failure(phase, cause, message)
+        self.experience.treatment_started(experience_id, self._scope_id, strategy)
+        if details:
+            self.context["recovery"]["treatment_details"] = copy.deepcopy(details)
+        self.repository.save(self.context)
+        return experience_id
+
+    def finish_runtime_treatment(self, success: bool, details: dict[str, Any] | None = None) -> None:
+        self._finish_active_treatment(success, details or {})
+        self.context["recovery"].pop("treatment_details", None)
+        self.repository.save(self.context)
+
+    def runtime_retry_count(self, phase: str) -> int:
+        counts = self.context["recovery"].setdefault("runtime_retry_counts", {})
+        return int(counts.get(phase, 0))
+
+    def register_runtime_retry(self, phase: str) -> int:
+        counts = self.context["recovery"].setdefault("runtime_retry_counts", {})
+        counts[phase] = int(counts.get(phase, 0)) + 1
+        self.repository.save(self.context)
+        return counts[phase]
+
+    def fail_runtime_terminal(self, phase: str, cause: str, message: str) -> TDState:
+        """End an internally unrecoverable run and leave a material failure artifact."""
+        payload = {
+            "type": "toe_dac_failure_report",
+            "user_thread_id": self.context["user_thread_id"],
+            "td_id": self.context["td_id"],
+            "session_id": self.context["session_id"],
+            "failed_at": utc_now(),
+            "phase": phase,
+            "cause": cause,
+            "message": message,
+            "target": self.context.get("target"),
+            "last_failure": self.context.get("recovery", {}).get("last_failure"),
+            "retry_counts": self.context.get("recovery", {}).get("runtime_retry_counts", {}),
+        }
+        artifact_ref = self.repository.write_artifact(
+            self.context,
+            f"failure-{self.context['session_id']}.json",
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        )
+
+        def mutation() -> None:
+            if not self.context["recovery"].get("active_experience_id"):
+                self._observe_failure(phase, cause, message)
+            self._finish_active_treatment(False, {
+                "terminal": True,
+                "artifact_ref": artifact_ref,
+            })
+            if artifact_ref not in self.context.setdefault("artifacts", []):
+                self.context["artifacts"].append(artifact_ref)
+
+        return self._transition(
+            "runtime_budget_exhausted",
+            mutation,
+            {"phase": phase, "cause": cause, "artifact_ref": artifact_ref},
+        )
+
     def submit_observation(self, observation: dict[str, Any]) -> TDState:
         self._require(TDState.OBSERVING)
+        def mutation() -> None:
+            previous = self.context.get("observation") or {}
+            if previous:
+                self.context.setdefault("observation_history", []).append(copy.deepcopy(previous))
+            self.context["observation"] = copy.deepcopy(observation)
+
         return self._validated_transition(
             "submit_observation", observation, validate_observation,
-            "observation_accepted", lambda: self.context.__setitem__("observation", copy.deepcopy(observation)),
+            "observation_accepted", mutation,
         )
+
+    def register_evidence(self, records: list[dict[str, Any]]) -> None:
+        """Register controller-created evidence without asking a model to manage paths."""
+        registry = self.context.setdefault("evidence_registry", [])
+        known = {str(item.get("evidence_id")) for item in registry}
+        for record in records:
+            evidence_id = str(record.get("evidence_id", "")).strip()
+            if not evidence_id or evidence_id in known:
+                continue
+            registry.append(copy.deepcopy(record))
+            known.add(evidence_id)
+        self.repository.save(self.context)
 
     def submit_estimate(self, estimate: dict[str, Any]) -> TDState:
         self._require(TDState.ESTIMATING)
+        try:
+            validate_estimate(estimate)
+        except ValidationError as exc:
+            self.repository.record_rejection(self.context, "submit_estimate", exc.errors)
+            raise
+        verdict = estimate.get("verdict")
+        if verdict == "needs_observation":
+            history = self.context.get("observation_history") or []
+            if history and self.context.get("observation") == history[-1]:
+                errors = [
+                    "re-observation produced no new facts; do not repeat the same Observe path",
+                ]
+                self.repository.record_rejection(self.context, "submit_estimate", errors)
+                raise ValidationError(errors)
+            recovery = self.context["recovery"]
+            if recovery["retry_count"] >= recovery["retry_budget"]:
+                errors = ["TD re-observation budget exhausted"]
+                self.repository.record_rejection(self.context, "submit_estimate", errors)
+                raise ValidationError(errors)
+
+            def reobserve_mutation() -> None:
+                self.context["estimate"] = copy.deepcopy(estimate)
+                recovery["retry_count"] += 1
+                self.context["control"]["waiting_reason"] = "; ".join(estimate.get("information_gaps", []))
+
+            return self._transition(
+                "estimate_requests_observation", reobserve_mutation,
+                {"information_gaps": estimate.get("information_gaps", [])},
+            )
         return self._validated_transition(
             "submit_estimate", estimate, validate_estimate,
             "estimate_accepted", lambda: self.context.__setitem__("estimate", copy.deepcopy(estimate)),
@@ -191,8 +365,91 @@ class TDService:
                 "status": "submitted",
                 "created_at": utc_now(),
             })
+            for evidence_ref in result.get("evidence_refs", []):
+                if evidence_ref not in self.context["artifacts"]:
+                    self.context["artifacts"].append(evidence_ref)
 
         return self._transition("action_submitted", mutation, {"action_id": action["action_id"]})
+
+    def current_action(self) -> dict[str, Any]:
+        return copy.deepcopy(self._current_action())
+
+    def user_reobserve(self, reason: str) -> TDState:
+        if self.state == TDState.OBSERVING:
+            return self.state
+        if self.state == TDState.ESTIMATING:
+            return self._transition(
+                "estimate_requests_observation",
+                lambda: self.context["control"].update({
+                    "waiting_reason": reason or "user requested another observation pass",
+                    "return_to": None,
+                    "human_question": None,
+                }),
+                {"reason": reason, "control_override": "reobserve"},
+            )
+        if self.state == TDState.WAITING_HUMAN:
+            return self._transition(
+                "observation_input_received",
+                lambda: self.context["control"].update({
+                    "waiting_reason": reason or "user requested another observation pass",
+                    "return_to": None,
+                    "human_question": None,
+                }),
+                {"reason": reason, "control_override": "reobserve"},
+            )
+        allowed = {
+            TDState.ESTIMATING, TDState.DECIDING, TDState.ACTING,
+            TDState.CHECKING_ACTION, TDState.CHECKING_TARGET, TDState.WAITING_HUMAN,
+        }
+        if self.state not in allowed:
+            raise TransitionError(self.state, "user_reobserve_requested", "state cannot return to Observe")
+
+        def mutation() -> None:
+            self.context["control"].update({
+                "waiting_reason": reason or "user requested another observation pass",
+                "return_to": None,
+                "human_question": None,
+            })
+
+        return self._transition("user_reobserve_requested", mutation, {"reason": reason})
+
+    def user_replan(self, reason: str) -> TDState:
+        if self.state == TDState.WAITING_HUMAN:
+            def waiting_replan_mutation() -> None:
+                self.context["control"].update({
+                    "waiting_reason": reason or "user requested a new plan",
+                    "return_to": None,
+                    "human_question": None,
+                })
+                if self.context.get("plan"):
+                    self.context["plan"]["status"] = "revision_requested"
+
+            return self._transition(
+                "decision_input_received",
+                waiting_replan_mutation,
+                {"reason": reason, "control_override": "replan"},
+            )
+        allowed = {
+            TDState.DECIDING, TDState.ACTING, TDState.CHECKING_ACTION,
+            TDState.CHECKING_TARGET, TDState.WAITING_HUMAN,
+        }
+        if self.state not in allowed:
+            raise TransitionError(self.state, "user_replan_requested", "state cannot return to Decide")
+        if self.state == TDState.DECIDING:
+            self.context["control"]["waiting_reason"] = reason
+            self.repository.save(self.context)
+            return self.state
+
+        def mutation() -> None:
+            self.context["control"].update({
+                "waiting_reason": reason or "user requested a new plan",
+                "return_to": None,
+                "human_question": None,
+            })
+            if self.context.get("plan"):
+                self.context["plan"]["status"] = "revision_requested"
+
+        return self._transition("user_replan_requested", mutation, {"reason": reason})
 
     def check_action(self, checks: list[dict[str, Any]]) -> TDState:
         self._require(TDState.CHECKING_ACTION)
@@ -241,6 +498,8 @@ class TDService:
         self._require(TDState.CHECKING_TARGET)
         passed = required_checks_pass(checks)
 
+        artifact_ref = self._ensure_completion_artifact(checks) if passed else None
+
         def mutation() -> None:
             self.context["checks"]["target_check"] = {
                 "checks": copy.deepcopy(checks),
@@ -251,7 +510,7 @@ class TDService:
                 self._finish_active_treatment(True, {"target_check_passed": True})
 
         if passed:
-            return self._transition("target_passed", mutation)
+            return self._transition("target_passed", mutation, {"artifact_ref": artifact_ref})
 
         def failed_mutation() -> None:
             mutation()
@@ -259,6 +518,40 @@ class TDService:
             self._observe_failure("check", "assertion_failed", "target acceptance criteria failed")
 
         return self._transition("target_failed", failed_mutation)
+
+    def _ensure_completion_artifact(self, checks: list[dict[str, Any]]) -> str:
+        """Enforce that every successful TD has at least one material Artifact."""
+        for reference in self.context.get("artifacts", []):
+            path = Path(str(reference))
+            resolved = path if path.is_absolute() else self.repository.root / path
+            if resolved.is_file():
+                return str(reference)
+
+        payload = {
+            "type": "toe_dac_completion_report",
+            "user_thread_id": self.context["user_thread_id"],
+            "td_id": self.context["td_id"],
+            "session_id": self.context["session_id"],
+            "completed_at": utc_now(),
+            "target": self.context.get("target"),
+            "plan": self.context.get("plan"),
+            "action_attempts": self.context.get("execution", {}).get("attempts", []),
+            "target_checks": copy.deepcopy(checks),
+        }
+        artifact_ref = self.repository.write_artifact(
+            self.context,
+            f"completion-{self.context['session_id']}.json",
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        )
+        self.context.setdefault("artifacts", []).append(artifact_ref)
+        self.repository.record_operation(
+            self.context,
+            "completion_artifact",
+            "succeeded",
+            phase="target_check",
+            data={"artifact_ref": artifact_ref, "auto_generated": True},
+        )
+        return artifact_ref
 
     def recover(
         self,
@@ -273,7 +566,8 @@ class TDService:
         allowed = {"retry_targeting", "retry_action", "replan", "reobserve", "escalate", "give_up"}
         if decision not in allowed:
             raise ValidationError([f"unsupported recovery decision: {decision}"])
-        if decision.startswith("retry_"):
+        automated_decisions = {"retry_targeting", "retry_action", "replan", "reobserve"}
+        if decision in automated_decisions:
             recovery = self.context["recovery"]
             if recovery["retry_count"] >= recovery["retry_budget"]:
                 errors = ["TD retry budget exhausted"]
@@ -290,7 +584,7 @@ class TDService:
         def mutation() -> None:
             recovery = self.context["recovery"]
             recovery["decision"] = {"type": decision, "reason": reason, "decided_at": utc_now()}
-            if decision.startswith("retry_"):
+            if decision in automated_decisions:
                 recovery["retry_count"] += 1
             if decision == "retry_action":
                 self._current_action()["status"] = "pending"
@@ -319,6 +613,9 @@ class TDService:
             "observing": "observation_input_received",
             "estimating": "estimate_input_received",
             "deciding": "decision_input_received",
+            "acting": "act_input_received",
+            "checking_action": "action_check_input_received",
+            "checking_target": "target_check_input_received",
             "recovering": "recovery_input_received",
         }
         if return_to not in event_by_return:

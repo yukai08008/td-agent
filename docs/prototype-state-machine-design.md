@@ -252,6 +252,10 @@ Guard 只判断是否允许转移，不执行外部副作用。
 
 ## 10. 持久化结构
 
+以下原型结构已经由 Storage V2 取代，现行规范以
+[CLI 准 Web 服务与持久化设计](runtime-storage-design.md) 为准。特别是，Session 的
+`trace/sessions/<session_id>/screenshots/` 就是截图的正式证据位置，不存在需要再次复制的 `./evidence/`。
+
 ```text
 data/
 ├── threads/
@@ -265,7 +269,7 @@ data/
 │               ├── state.json
 │               ├── event.jsonl
 │               ├── operation.jsonl
-│               ├── evidence/
+│               ├── trace/sessions/<session_id>/screenshots/
 │               └── artifacts/
 └── experience/
     ├── ledger.jsonl
@@ -278,7 +282,7 @@ data/
 - `experience/ledger.jsonl`：跨 TD 追加记录异常出现、处置、采纳决策和成功/失败结果；
 - `experience/index.json`：从经验账本投影出的检索字段和策略统计，可丢弃后重建；
 - Thread 下的 `sessions/`：记录该需求的每次交互式运行、结束状态和关联 TD；
-- `evidence/`：保存证据文件；日志中只记录相对路径、类型和哈希；
+- `trace/sessions/<session_id>/screenshots/`：保存截图原始证据；该目录本身即正式证据位置；
 - `artifacts/`：保存 TD 的阶段性或最终产物。
 
 日志采用追加写入。`state.json` 是运行快照，`operation.jsonl` 是恢复和审计的事实记录。

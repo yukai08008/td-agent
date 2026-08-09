@@ -10,6 +10,29 @@ class ValidationError(ValueError):
         super().__init__("; ".join(errors))
 
 
+CHECK_TYPES = {
+    "non_empty", "contains", "language_zh", "max_length",
+    "observation_contains", "observation_field_non_empty",
+    "artifact_exists", "evidence_exists",
+    "references_evidence", "semantic",
+}
+
+
+def _check_spec_errors(value: Any, field: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, dict):
+        return [f"{field} must be an object"]
+    check_type = value.get("type")
+    if check_type not in CHECK_TYPES:
+        return [f"{field}.type must be a supported deterministic check or semantic"]
+    if check_type in {"contains", "observation_contains", "max_length"} and "value" not in value:
+        return [f"{field}.value is required for {check_type}"]
+    if check_type == "observation_field_non_empty" and not value.get("field"):
+        return [f"{field}.field is required for observation_field_non_empty"]
+    return []
+
+
 def _non_empty_list(value: Any) -> bool:
     return isinstance(value, list) and bool(value)
 
@@ -25,6 +48,9 @@ def validate_target(data: dict[str, Any]) -> None:
         errors.append("acceptance_criteria must be a non-empty list")
     elif any(not isinstance(item, dict) or not item.get("description") for item in criteria):
         errors.append("each acceptance criterion must be an object with a description")
+    else:
+        for index, criterion in enumerate(criteria):
+            errors.extend(_check_spec_errors(criterion.get("check"), f"acceptance_criteria[{index}].check"))
     if errors:
         raise ValidationError(errors)
 
@@ -46,8 +72,8 @@ def validate_observation(data: dict[str, Any]) -> None:
 
 def validate_estimate(data: dict[str, Any]) -> None:
     errors = []
-    if data.get("verdict") != "feasible":
-        errors.append("verdict must be feasible before Decide")
+    if data.get("verdict") not in {"feasible", "needs_observation", "not_feasible"}:
+        errors.append("verdict must be feasible, needs_observation, or not_feasible")
     for field in ("risks", "cost", "information_gaps"):
         if field not in data:
             errors.append(f"{field} is required")
@@ -72,6 +98,17 @@ def validate_plan(data: dict[str, Any]) -> None:
             errors.append(f"actions[{index}] needs an objective")
         if not _non_empty_list(action.get("assertions")):
             errors.append(f"actions[{index}] needs at least one assertion")
+        else:
+            for assertion_index, assertion in enumerate(action["assertions"]):
+                if not isinstance(assertion, dict):
+                    errors.append(f"actions[{index}].assertions[{assertion_index}] must be an object")
+                    continue
+                errors.extend(_check_spec_errors(
+                    assertion.get("check"),
+                    f"actions[{index}].assertions[{assertion_index}].check",
+                ))
+        if action.get("executor") not in {None, "agent_response", "external"}:
+            errors.append(f"actions[{index}].executor must be agent_response or external")
         try:
             max_attempts = int(action.get("max_attempts", 1))
         except (TypeError, ValueError):
