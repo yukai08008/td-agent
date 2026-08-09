@@ -2,12 +2,14 @@
 set -euo pipefail
 
 REPO="yukai08008/td-agent"
+LATEST_VERSION="0.4.0"
 TOOL_NAME="toe-dac"
 BIN_NAME="toe-dac"
 INSTALL_DIR="${HOME}/.local/bin"
 CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/td-agent"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
 PACKAGE_SPEC="git+https://github.com/${REPO}.git"
+PACKAGE_FALLBACK="git+https://github.com/${REPO}.git"
 RELEASE_LABEL="latest"
 
 RED='\033[0;31m'
@@ -19,12 +21,34 @@ info()  { printf "${GREEN}[td-agent]${NC} %s\n" "$*"; }
 warn()  { printf "${YELLOW}[td-agent]${NC} %s\n" "$*"; }
 error() { printf "${RED}[td-agent]${NC} %s\n" "$*" >&2; exit 1; }
 
+download() {
+  local label="$1"
+  local url="$2"
+  local destination="$3"
+  info "Downloading ${label}..."
+  curl -fL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 1 \
+    --progress-bar "$url" -o "$destination"
+}
+
+select_package() {
+  local version="$1"
+  local major minor
+  IFS='.' read -r major minor _ <<< "$version"
+  PACKAGE_FALLBACK="git+https://github.com/${REPO}.git@v${version}"
+  if [[ "$version" != *-* ]] && { [ "$major" -gt 0 ] || [ "$minor" -ge 4 ]; }; then
+    PACKAGE_SPEC="https://github.com/${REPO}/releases/download/v${version}/toe_dac-${version}-py3-none-any.whl"
+  else
+    PACKAGE_SPEC="$PACKAGE_FALLBACK"
+  fi
+}
+
 select_release() {
   local requested="${1:-latest}"
   if [ "$requested" = "latest" ]; then
     RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
-    PACKAGE_SPEC="git+https://github.com/${REPO}.git"
-    RELEASE_LABEL="latest"
+    select_package "$LATEST_VERSION"
+    PACKAGE_FALLBACK="git+https://github.com/${REPO}.git"
+    RELEASE_LABEL="latest (v${LATEST_VERSION})"
     return
   fi
 
@@ -35,7 +59,7 @@ select_release() {
     error "v0.1.0 used a private local dependency; public standalone versions start at v0.2.0."
   fi
   RAW_BASE="https://raw.githubusercontent.com/${REPO}/v${requested}"
-  PACKAGE_SPEC="git+https://github.com/${REPO}.git@v${requested}"
+  select_package "$requested"
   RELEASE_LABEL="v${requested}"
 }
 
@@ -44,7 +68,8 @@ ensure_uv() {
     return
   fi
   info "uv not found; installing it from astral.sh..."
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  curl -fL --connect-timeout 10 --max-time 120 --retry 3 --progress-bar \
+    https://astral.sh/uv/install.sh | sh
   export PATH="${INSTALL_DIR}:${PATH}"
   command -v uv >/dev/null 2>&1 || error "uv installation failed; see https://docs.astral.sh/uv/"
 }
@@ -71,14 +96,14 @@ ensure_config() {
   chmod 700 "$CONFIG_DIR"
 
   if [ ! -f "${CONFIG_DIR}/models.json" ]; then
-    curl -fsSL "${RAW_BASE}/config/models.json" -o "${CONFIG_DIR}/models.json"
+    download "model registry" "${RAW_BASE}/config/models.json" "${CONFIG_DIR}/models.json"
     info "Created ${CONFIG_DIR}/models.json"
   fi
   if [ ! -f "${CONFIG_DIR}/.env.example" ]; then
-    curl -fsSL "${RAW_BASE}/.env.example" -o "${CONFIG_DIR}/.env.example"
+    download "environment template" "${RAW_BASE}/.env.example" "${CONFIG_DIR}/.env.example"
   fi
   if [ ! -f "${CONFIG_DIR}/.env" ]; then
-    curl -fsSL "${RAW_BASE}/.env" -o "${CONFIG_DIR}/.env"
+    download "environment defaults" "${RAW_BASE}/.env" "${CONFIG_DIR}/.env"
   fi
   if [ ! -f "${CONFIG_DIR}/.env.local" ]; then
     cp "${CONFIG_DIR}/.env.example" "${CONFIG_DIR}/.env.local"
@@ -90,11 +115,18 @@ ensure_config() {
 install_or_update() {
   local action="$1"
   info "${action} TD Agent ${RELEASE_LABEL} from github.com/${REPO}..."
-  uv tool install --force "$PACKAGE_SPEC"
+  info "Installing the isolated CLI package. Dependency progress will appear below."
+  if ! UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-30}" uv tool install --force "$PACKAGE_SPEC"; then
+    if [ "$PACKAGE_SPEC" = "$PACKAGE_FALLBACK" ]; then
+      error "Package installation failed. Check the network output above."
+    fi
+    warn "Prebuilt wheel unavailable; falling back to the Git repository."
+    UV_HTTP_TIMEOUT="${UV_HTTP_TIMEOUT:-30}" uv tool install --force "$PACKAGE_FALLBACK"
+  fi
   ensure_config
   if command -v "$BIN_NAME" >/dev/null 2>&1; then
     info "TD Agent is ready: $($BIN_NAME --version | sed -n '1p')"
-    info "Run '${BIN_NAME} doctor', then '${BIN_NAME} new'."
+    info "Run '${BIN_NAME}'. It will guide model configuration when required."
   elif [ -x "${INSTALL_DIR}/${BIN_NAME}" ]; then
     warn "Installed successfully. Restart the terminal so ${INSTALL_DIR} is in PATH."
   else

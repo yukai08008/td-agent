@@ -17,12 +17,11 @@ from .chat_ui import run_chat
 from . import __version__
 from .cli_settings import (
     default_data_dir,
-    enabled_models,
     model_config_path,
-    resolve_model,
     resolve_thread,
     user_config_dir,
 )
+from .config_manager import ensure_model_ready, print_config_status, run_config_manager
 from .environment import find_project_root, load_environment
 from .releases import forwarded_version_args, package_spec
 from .update_check import notify_if_update_available
@@ -184,8 +183,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("threads", help="list User Threads")
     sessions = subparsers.add_parser("sessions", help="list Sessions attached to a User Thread")
     sessions.add_argument("--thread", help="User Thread; defaults to the most recently used thread")
-    config_parser = subparsers.add_parser("config", help="show effective CLI and model configuration")
+    config_parser = subparsers.add_parser("config", help="configure model API keys and defaults")
     config_parser.add_argument("--model-config", help="local model registry JSON")
+    config_parser.add_argument("--show", action="store_true", help="show status without opening the manager")
     doctor = subparsers.add_parser("doctor", help="check whether interactive chat can start")
     doctor.add_argument("--model", help="model id to validate")
     doctor.add_argument("--model-config", help="local model registry JSON")
@@ -253,7 +253,7 @@ def main() -> None:
             parser.error(f"User Thread already exists: {thread_id}; use chat --thread {thread_id} to resume it")
         config_path = model_config_path(args.model_config)
         try:
-            model_id = resolve_model(config_path, args.model)
+            model_id = ensure_model_ready(config_path, args.model, interactive=sys.stdin.isatty())
             adapter = TOEDACLLMAdapter(config_path, model_id)
         except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError) as exc:
             parser.error(str(exc))
@@ -316,7 +316,11 @@ def main() -> None:
     elif command in {"chat", "continue"}:
         config_path = model_config_path(getattr(args, "model_config", None))
         try:
-            model_id = resolve_model(config_path, getattr(args, "model", None))
+            model_id = ensure_model_ready(
+                config_path,
+                getattr(args, "model", None),
+                interactive=sys.stdin.isatty(),
+            )
             thread_id = resolve_thread(repository, getattr(args, "thread", None))
             adapter = TOEDACLLMAdapter(config_path, model_id)
         except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError) as exc:
@@ -357,18 +361,18 @@ def main() -> None:
             )
     elif command == "config":
         config_path = model_config_path(args.model_config)
-        print(f"data:         {Path(args.data).resolve()}")
-        print(f"model config: {config_path.resolve()}")
-        models = enabled_models(config_path)
-        print("models:       " + (", ".join(str(item["id"]) for item in models) or "none"))
-        print(f"model env:    {os.environ.get('TOE_DAC_MODEL', 'not set')}")
-        print(f"thread env:   {os.environ.get('TOE_DAC_THREAD', 'not set')}")
-        print(f"update check: {os.environ.get('TOE_DAC_UPDATE_CHECK', 'true') or 'true'}")
-        print(f"check every:  {os.environ.get('TOE_DAC_UPDATE_CHECK_INTERVAL', '86400') or '86400'} seconds")
+        try:
+            if args.show or not sys.stdin.isatty():
+                print_config_status(config_path)
+            else:
+                run_config_manager(config_path)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            parser.error(str(exc))
     elif command == "doctor":
         config_path = model_config_path(args.model_config)
         try:
-            model_id = resolve_model(config_path, args.model)
+            model_id = ensure_model_ready(config_path, args.model, interactive=False)
+            TOEDACLLMAdapter(config_path, model_id)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             parser.error(str(exc))
         Path(args.data).mkdir(parents=True, exist_ok=True)

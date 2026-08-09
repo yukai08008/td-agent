@@ -11,22 +11,25 @@
 支持 Linux 和 macOS：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash
+curl -fL --connect-timeout 10 --retry 3 --progress-bar \
+  https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash
 ```
 
 安装脚本会在需要时安装 [uv](https://docs.astral.sh/uv/)，把 TD Agent 安装为隔离的 uv tool，并在 `~/.config/td-agent/` 初始化当前机器的配置。
 
-在 `~/.config/td-agent/.env.local` 中填入至少一个模型 API Key，然后运行：
+安装完成后直接运行：
 
 ```bash
-toe-dac doctor
-toe-dac new
+toe-dac
 ```
+
+CLI 启动时会检查是否至少存在一个真正可用的模型配置；如果没有，会自动引导选择模型并输入 API Key。密钥只保存到当前机器的 `~/.config/td-agent/.env.local`。
 
 ## 卸载
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- uninstall
+curl -fL --connect-timeout 10 --retry 3 --progress-bar \
+  https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- uninstall
 ```
 
 卸载会保留 `~/.config/td-agent/` 中的配置和本地运行数据。
@@ -40,7 +43,8 @@ toe-dac upgrade
 也可以显式运行安装脚本：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- update
+curl -fL --connect-timeout 10 --retry 3 --progress-bar \
+  https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- update
 ```
 
 TD Agent 每次启动都会检查更新。检查使用本地缓存和短网络超时，只有发现远端版本更新时才显示提示。
@@ -68,14 +72,15 @@ toe-dac --use-version 0.2.0 --data ~/.local/share/td-agent-v0.2 new
 
 ```bash
 toe-dac upgrade --version 0.2.0
-curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- install 0.2.0
+curl -fL --connect-timeout 10 --retry 3 --progress-bar \
+  https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- install 0.2.0
 ```
 
 公开仓库从 `v0.2.0` 开始支持独立安装。测试可能使用不兼容持久化格式的旧版本时，应通过 `--data` 使用独立数据目录。
 
 ## 当前版本
 
-当前稳定版本为 [v0.3.1](https://github.com/yukai08008/td-agent/releases/tag/v0.3.1)，支持公开独立安装、持久化交互，以及临时运行或固定安装指定版本。
+当前稳定版本为 [v0.4.0](https://github.com/yukai08008/td-agent/releases/tag/v0.4.0)，支持启动配置引导、可观察的快速安装、持久化交互，以及指定版本运行。
 
 [完整版本记录](versions.md) · [GitHub Releases](https://github.com/yukai08008/td-agent/releases)
 
@@ -108,6 +113,7 @@ toe-dac sessions --thread ut_xxxxxxxx
 
 # 检查当前配置
 toe-dac config
+toe-dac config --show
 toe-dac doctor
 
 # 更新到 GitHub 最新版本
