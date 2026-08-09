@@ -7,6 +7,8 @@ BIN_NAME="toe-dac"
 INSTALL_DIR="${HOME}/.local/bin"
 CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/td-agent"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
+PACKAGE_SPEC="git+https://github.com/${REPO}.git"
+RELEASE_LABEL="latest"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -16,6 +18,26 @@ NC='\033[0m'
 info()  { printf "${GREEN}[td-agent]${NC} %s\n" "$*"; }
 warn()  { printf "${YELLOW}[td-agent]${NC} %s\n" "$*"; }
 error() { printf "${RED}[td-agent]${NC} %s\n" "$*" >&2; exit 1; }
+
+select_release() {
+  local requested="${1:-latest}"
+  if [ "$requested" = "latest" ]; then
+    RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
+    PACKAGE_SPEC="git+https://github.com/${REPO}.git"
+    RELEASE_LABEL="latest"
+    return
+  fi
+
+  requested="${requested#v}"
+  [[ "$requested" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || \
+    error "Invalid version '${requested}'; expected X.Y.Z or latest."
+  if [ "$requested" = "0.1.0" ]; then
+    error "v0.1.0 used a private local dependency; public standalone versions start at v0.2.0."
+  fi
+  RAW_BASE="https://raw.githubusercontent.com/${REPO}/v${requested}"
+  PACKAGE_SPEC="git+https://github.com/${REPO}.git@v${requested}"
+  RELEASE_LABEL="v${requested}"
+}
 
 ensure_uv() {
   if command -v uv >/dev/null 2>&1; then
@@ -67,8 +89,8 @@ ensure_config() {
 
 install_or_update() {
   local action="$1"
-  info "${action} TD Agent from github.com/${REPO}..."
-  uv tool install --force "git+https://github.com/${REPO}.git"
+  info "${action} TD Agent ${RELEASE_LABEL} from github.com/${REPO}..."
+  uv tool install --force "$PACKAGE_SPEC"
   ensure_config
   if command -v "$BIN_NAME" >/dev/null 2>&1; then
     info "TD Agent is ready: $($BIN_NAME --version | sed -n '1p')"
@@ -91,11 +113,13 @@ uninstall() {
 main() {
   case "${1:-install}" in
     install)
+      select_release "${2:-${TD_AGENT_VERSION:-latest}}"
       ensure_uv
       ensure_path
       install_or_update "Installing"
       ;;
     update|upgrade)
+      select_release "${2:-${TD_AGENT_VERSION:-latest}}"
       ensure_uv
       ensure_path
       install_or_update "Updating"
@@ -104,7 +128,7 @@ main() {
       uninstall
       ;;
     *)
-      error "Usage: install.sh [install|update|uninstall]"
+      error "Usage: install.sh [install|update] [latest|X.Y.Z] | uninstall"
       ;;
   esac
 }

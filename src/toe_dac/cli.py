@@ -25,6 +25,7 @@ from .cli_settings import (
     user_config_dir,
 )
 from .environment import find_project_root, load_environment
+from .releases import forwarded_version_args, package_spec
 from .update_check import notify_if_update_available
 from .llm_adapter import TOEDACLLMAdapter
 from .service import TDService
@@ -120,6 +121,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="toe-dac")
     parser.add_argument("--version", action="store_true", help="show version and system information")
     parser.add_argument(
+        "--use-version",
+        metavar="VERSION",
+        help="temporarily run an exact tagged release without replacing the installed version",
+    )
+    parser.add_argument(
         "--data",
         default=os.environ.get("TOE_DAC_DATA") or str(default_data_dir()),
         help="data directory",
@@ -184,7 +190,8 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = subparsers.add_parser("doctor", help="check whether interactive chat can start")
     doctor.add_argument("--model", help="model id to validate")
     doctor.add_argument("--model-config", help="local model registry JSON")
-    subparsers.add_parser("upgrade", help="upgrade TD Agent to the latest GitHub version")
+    upgrade = subparsers.add_parser("upgrade", help="install the latest or an exact GitHub release")
+    upgrade.add_argument("--version", dest="upgrade_version", help="install an exact release, for example 0.2.0")
     changelog = subparsers.add_parser("changelog", help="show release notes")
     changelog.add_argument("--version", dest="changelog_version", help="show one version, for example 0.2.0")
     return parser
@@ -198,6 +205,30 @@ def main() -> None:
         load_environment(user_config_dir())
     parser = build_parser()
     args = parser.parse_args()
+    if args.use_version:
+        try:
+            selected_package = package_spec(args.use_version)
+        except ValueError as exc:
+            parser.error(str(exc))
+        environment = os.environ.copy()
+        environment["TOE_DAC_UPDATE_CHECK"] = "false"
+        result = subprocess.run(
+            [
+                "uv",
+                "tool",
+                "run",
+                "--from",
+                selected_package,
+                "toe-dac",
+                *forwarded_version_args(sys.argv[1:]),
+            ],
+            text=True,
+            check=False,
+            env=environment,
+        )
+        if result.returncode != 0:
+            raise SystemExit(result.returncode)
+        return
     notify_if_update_available(__version__)
     if args.version:
         if sys.stdout.isatty():
@@ -349,14 +380,18 @@ def main() -> None:
         print(f"OK  data          {Path(args.data).resolve()}")
     elif command == "upgrade":
         print(f"Current version: {__version__}")
+        try:
+            selected_package = package_spec(args.upgrade_version)
+        except ValueError as exc:
+            parser.error(str(exc))
         result = subprocess.run(
-            ["uv", "tool", "install", "--force", "git+https://github.com/yukai08008/td-agent.git"],
+            ["uv", "tool", "install", "--force", selected_package],
             text=True,
             check=False,
         )
         if result.returncode != 0:
             raise SystemExit(result.returncode)
-        print("Upgrade complete. Run `toe-dac --version` to verify the installed version.")
+        print("Installation complete. Run `toe-dac --version` to verify the installed version.")
     elif command == "changelog":
         try:
             content = load_changelog()

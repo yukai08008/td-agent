@@ -10,6 +10,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Reserved for changes that have not yet been released.
 
+## [0.3.0] - 2026-08-09
+
+### Added
+
+- Temporary execution of an exact tagged release with `toe-dac --use-version X.Y.Z`.
+- Exact-version installation with `toe-dac upgrade --version X.Y.Z`.
+- Version selection in the one-line installer with `install.sh install X.Y.Z` or `update X.Y.Z`.
+
+### Changed
+
+- Explicit older-release runs suppress the normal latest-version notification for that process.
+
 ## [0.2.0] - 2026-08-09
 
 ### Added
@@ -47,6 +59,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Executable mock and live E2E proof-of-concept scenarios.
 - Rich interactive terminal interface.
 
-[Unreleased]: https://github.com/yukai08008/td-agent/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/yukai08008/td-agent/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/yukai08008/td-agent/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/yukai08008/td-agent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/yukai08008/td-agent/releases/tag/v0.1.0

@@ -55,6 +55,24 @@ TOE_DAC_UPDATE_CHECK_TIMEOUT=1.5
 
 Set `TOE_DAC_UPDATE_CHECK=false` to disable it.
 
+## Run a specific version
+
+The installed CLI runs normally by default. To temporarily run an exact tagged release without replacing it:
+
+```bash
+toe-dac --use-version 0.2.0 --version
+toe-dac --use-version 0.2.0 --data ~/.local/share/td-agent-v0.2 new
+```
+
+To permanently install an exact release:
+
+```bash
+toe-dac upgrade --version 0.2.0
+curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- install 0.2.0
+```
+
+Tagged standalone execution is supported from `v0.2.0`. Use a separate `--data` directory when testing a release with an incompatible persisted-state format.
+
 ## Changelog
 
 ```bash
@@ -62,7 +80,7 @@ Set `TOE_DAC_UPDATE_CHECK=false` to disable it.
 toe-dac changelog
 
 # Show one release before upgrading
-toe-dac changelog --version 0.2.0
+toe-dac changelog --version 0.3.0
 ```
 
 Repository history: [CHANGELOG.md](CHANGELOG.md). Formal versions are also published as GitHub Releases with `vX.Y.Z` tags.

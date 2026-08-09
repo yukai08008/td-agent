@@ -55,6 +55,24 @@ TOE_DAC_UPDATE_CHECK_TIMEOUT=1.5
 
 设置 `TOE_DAC_UPDATE_CHECK=false` 可以关闭更新检查。
 
+## 运行指定版本
+
+默认直接运行当前安装的 CLI。临时运行指定 Tag、且不替换当前安装版本：
+
+```bash
+toe-dac --use-version 0.2.0 --version
+toe-dac --use-version 0.2.0 --data ~/.local/share/td-agent-v0.2 new
+```
+
+把本机长期固定到指定版本：
+
+```bash
+toe-dac upgrade --version 0.2.0
+curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- install 0.2.0
+```
+
+公开仓库从 `v0.2.0` 开始支持独立安装。测试可能使用不兼容持久化格式的旧版本时，应通过 `--data` 使用独立数据目录。
+
 ## 变更日志
 
 ```bash
@@ -62,7 +80,7 @@ TOE_DAC_UPDATE_CHECK_TIMEOUT=1.5
 toe-dac changelog
 
 # 更新前查看指定版本
-toe-dac changelog --version 0.2.0
+toe-dac changelog --version 0.3.0
 ```
 
 仓库内以 [CHANGELOG.md](CHANGELOG.md) 作为唯一事实来源；正式版本同时使用 `vX.Y.Z` Tag 和 GitHub Release 展示。
