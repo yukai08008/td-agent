@@ -80,7 +80,7 @@ Tagged standalone execution is supported from `v0.2.0`. Use a separate `--data` 
 
 ## Current release
 
-The current stable release is [v0.4.0](https://github.com/yukai08008/td-agent/releases/tag/v0.4.0), with guided model setup, observable fast installation, persistent interaction, and exact-release execution.
+The current stable release is [v0.4.1](https://github.com/yukai08008/td-agent/releases/tag/v0.4.1), with an agenty-sized runtime dependency set, guided model setup, persistent interaction, and exact-release execution.
 
 [Complete version record](versions.md) · [GitHub Releases](https://github.com/yukai08008/td-agent/releases)
 

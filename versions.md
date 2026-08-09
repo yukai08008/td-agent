@@ -9,6 +9,7 @@
 
 | 版本 | 日期 | 版本主题 | 详细说明 |
 | --- | --- | --- | --- |
+| `v0.4.1` | 2026-08-09 | 安装依赖收敛到 agenty 同一量级 | [版本说明](docs/releases/v0.4.1.md) |
 | `v0.4.0` | 2026-08-09 | 启动配置引导与可观察安装 | [版本说明](docs/releases/v0.4.0.md) |
 | `v0.3.1` | 2026-08-09 | GitHub-first 的结构化版本展示 | [版本说明](docs/releases/v0.3.1.md) |
 | `v0.3.0` | 2026-08-09 | 临时运行或固定安装指定版本 | [版本说明](docs/releases/v0.3.0.md) |
@@ -23,4 +24,4 @@
 - README 只描述当前版本；完整历史以本页和 Releases 为准。
 
 [查看所有 Releases](https://github.com/yukai08008/td-agent/releases) ·
-[比较 v0.3.1...v0.4.0](https://github.com/yukai08008/td-agent/compare/v0.3.1...v0.4.0)
+[比较 v0.4.0...v0.4.1](https://github.com/yukai08008/td-agent/compare/v0.4.0...v0.4.1)

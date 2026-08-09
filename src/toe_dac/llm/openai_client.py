@@ -3,10 +3,10 @@
 import json
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
-import aiohttp
 import logging
 
 from .base import LLMClientBase
+from .http_transport import HTTPResponseError, post_json
 from .node.node import Message, MessageRole, LLMResponse, ToolCall, ToolType
 
 logger = logging.getLogger(__name__)
@@ -50,29 +50,12 @@ class OpenAIClient(LLMClientBase):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    request_url,
-                    headers=headers,
-                    json=request_data,
-                    timeout=aiohttp.ClientTimeout(total=60)
-                ) as response:
-                    if response.status != 200:
-                        error_body = await response.text()
-                        logger.error(f"HTTP {response.status} from {request_url}: {error_body[:500]}")
-                        response.raise_for_status()
-                    response_data = await response.json()
-
-                    # Parse response
-                    parsed_response = self._parse_response(response_data)
-
-                    # Log response with correlation
-                    self._log_response(response_data, parsed_response, request_id)
-
-                    return parsed_response
-
-        except aiohttp.ClientError as e:
-            logger.error(f"HTTP error in OpenAI client: {e}")
+            response_data = await post_json(request_url, headers, request_data)
+            parsed_response = self._parse_response(response_data)
+            self._log_response(response_data, parsed_response, request_id)
+            return parsed_response
+        except HTTPResponseError as e:
+            logger.error("HTTP error in OpenAI client: %s", e)
             raise
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error in OpenAI client: {e}")

@@ -1,13 +1,10 @@
 [project]
 name = "toe-dac"
-version = "0.4.0"
+version = "0.4.1"
 description = "Persistent interactive agent CLI based on the TOE-DAC control protocol"
 requires-python = ">=3.12"
 dependencies = [
-    "aiohttp>=3.13",
-    "pydantic>=2.0",
     "questionary>=2.1",
-    "python-dotenv>=1.1",
     "rich>=13.0",
 ]
 

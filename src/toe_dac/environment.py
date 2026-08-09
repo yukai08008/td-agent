@@ -1,13 +1,38 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 from pathlib import Path
 from typing import Mapping
 
-from dotenv import dotenv_values
-
 
 ENV_FILES_LOW_TO_HIGH = (".env.example", ".env", ".env.local")
+ENV_ASSIGNMENT = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+
+
+def dotenv_values(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = ENV_ASSIGNMENT.match(line)
+        if not match:
+            continue
+        key, raw_value = match.groups()
+        value = raw_value.strip()
+        if value.startswith('"') and value.endswith('"'):
+            try:
+                value = str(json.loads(value))
+            except json.JSONDecodeError:
+                value = value[1:-1]
+        elif value.startswith("'") and value.endswith("'"):
+            value = value[1:-1]
+        else:
+            value = value.split(" #", 1)[0].strip()
+        values[key] = value
+    return values
 
 
 def find_project_root(start: str | Path | None = None) -> Path:
@@ -36,9 +61,7 @@ def load_environment(
         path = project_root / filename
         if not path.exists():
             continue
-        for key, value in dotenv_values(path).items():
-            if value is not None:
-                file_values[key] = value
+        file_values.update(dotenv_values(path))
 
     process_values = dict(os.environ if process_environment is None else process_environment)
     effective = {**file_values, **process_values}
