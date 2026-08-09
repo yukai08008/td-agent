@@ -73,16 +73,11 @@ curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh
 
 公开仓库从 `v0.2.0` 开始支持独立安装。测试可能使用不兼容持久化格式的旧版本时，应通过 `--data` 使用独立数据目录。
 
-## 版本变化
+## 当前版本
 
-| 版本 | 重点变化 | 详情 |
-| --- | --- | --- |
-| `v0.3.1` | GitHub-first 的结构化版本展示 | [Release](https://github.com/yukai08008/td-agent/releases/tag/v0.3.1) |
-| `v0.3.0` | 临时运行或固定安装指定版本 | [Release](https://github.com/yukai08008/td-agent/releases/tag/v0.3.0) |
-| `v0.2.0` | 可公开独立安装与安全配置 | [Release](https://github.com/yukai08008/td-agent/releases/tag/v0.2.0) |
-| `v0.1.0` | TOE-DAC 交互式原型 | [Release](https://github.com/yukai08008/td-agent/releases/tag/v0.1.0) |
+当前稳定版本为 [v0.3.1](https://github.com/yukai08008/td-agent/releases/tag/v0.3.1)，支持公开独立安装、持久化交互，以及临时运行或固定安装指定版本。
 
-[查看完整版本历史](CHANGELOG.md) · [查看所有 GitHub Releases](https://github.com/yukai08008/td-agent/releases)
+[完整版本记录](versions.md) · [GitHub Releases](https://github.com/yukai08008/td-agent/releases)
 
 ## 使用 uv 直接安装
 

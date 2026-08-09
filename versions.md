@@ -19,7 +19,7 @@
 - `v0.x.0`：增加用户可见能力或调整产品行为。
 - `v0.x.y`：兼容性修正、文档和发布体验改进。
 - Git Tag 固定代码快照，GitHub Release 展示该版本的结构化变化。
-- README 只展示最近版本摘要，完整历史以本页和 Releases 为准。
+- README 只描述当前版本；完整历史以本页和 Releases 为准。
 
 [查看所有 Releases](https://github.com/yukai08008/td-agent/releases) ·
 [比较 v0.3.0...v0.3.1](https://github.com/yukai08008/td-agent/compare/v0.3.0...v0.3.1)

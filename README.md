@@ -73,16 +73,11 @@ curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh
 
 Tagged standalone execution is supported from `v0.2.0`. Use a separate `--data` directory when testing a release with an incompatible persisted-state format.
 
-## Version history
+## Current release
 
-| Version | Highlight | Details |
-| --- | --- | --- |
-| `v0.3.1` | Structured, GitHub-first release presentation | [Release](https://github.com/yukai08008/td-agent/releases/tag/v0.3.1) |
-| `v0.3.0` | Run temporarily or install an exact release | [Release](https://github.com/yukai08008/td-agent/releases/tag/v0.3.0) |
-| `v0.2.0` | Standalone public installation and safe configuration | [Release](https://github.com/yukai08008/td-agent/releases/tag/v0.2.0) |
-| `v0.1.0` | Interactive TOE-DAC proof of concept | [Release](https://github.com/yukai08008/td-agent/releases/tag/v0.1.0) |
+The current stable release is [v0.3.1](https://github.com/yukai08008/td-agent/releases/tag/v0.3.1), with standalone public installation, persistent interaction, and temporary or pinned execution of exact releases.
 
-[Complete version history](CHANGELOG.md) · [All GitHub Releases](https://github.com/yukai08008/td-agent/releases)
+[Complete version record](versions.md) · [GitHub Releases](https://github.com/yukai08008/td-agent/releases)
 
 ## Install with uv directly
 
