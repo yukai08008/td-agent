@@ -12,7 +12,7 @@
 
 ```bash
 curl -fL --connect-timeout 10 --retry 3 --progress-bar \
-  https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash
+  https://raw.githubusercontent.com/yukai08008/td-agent/v0.4.2/install.sh | bash
 ```
 
 安装脚本会在需要时安装 [uv](https://docs.astral.sh/uv/)，把 TD Agent 安装为隔离的 uv tool，并在 `~/.config/td-agent/` 初始化当前机器的配置。
@@ -29,7 +29,7 @@ CLI 启动时会检查是否至少存在一个真正可用的模型配置；如�
 
 ```bash
 curl -fL --connect-timeout 10 --retry 3 --progress-bar \
-  https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- uninstall
+  https://raw.githubusercontent.com/yukai08008/td-agent/v0.4.2/install.sh | bash -s -- uninstall
 ```
 
 卸载会保留 `~/.config/td-agent/` 中的配置和本地运行数据。
@@ -44,7 +44,7 @@ toe-dac upgrade
 
 ```bash
 curl -fL --connect-timeout 10 --retry 3 --progress-bar \
-  https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- update
+  https://raw.githubusercontent.com/yukai08008/td-agent/v0.4.2/install.sh | bash -s -- update
 ```
 
 TD Agent 每次启动都会检查更新。检查使用本地缓存和短网络超时，只有发现远端版本更新时才显示提示。
@@ -73,7 +73,7 @@ toe-dac --use-version 0.2.0 --data ~/.local/share/td-agent-v0.2 new
 ```bash
 toe-dac upgrade --version 0.2.0
 curl -fL --connect-timeout 10 --retry 3 --progress-bar \
-  https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh | bash -s -- install 0.2.0
+  https://raw.githubusercontent.com/yukai08008/td-agent/v0.4.2/install.sh | bash -s -- install 0.2.0
 ```
 
 公开仓库从 `v0.2.0` 开始支持独立安装。测试可能使用不兼容持久化格式的旧版本时，应通过 `--data` 使用独立数据目录。
