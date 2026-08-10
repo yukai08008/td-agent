@@ -145,6 +145,7 @@ class TDService:
         details: dict[str, Any] | None = None,
     ) -> str:
         """Persist an exception that was handled without a state transition."""
+        signature = {"phase": phase, "cause": cause}
         experience_id = self.experience.observe_exception(
             scope_id=self._scope_id,
             user_thread_id=self.context["user_thread_id"],
@@ -158,9 +159,16 @@ class TDService:
                 "action_summary": "",
                 "occurred_at": utc_now(),
             },
+            visibility=self._experience_visibility(cause),
+            signature=signature,
+            source_refs=self._source_refs_from_details(details),
         )
-        self.experience.treatment_started(experience_id, self._scope_id, strategy)
-        self.experience.treatment_finished(experience_id, self._scope_id, True, details or {})
+        treatment_id = self.experience.treatment_started(
+            experience_id, self._scope_id, strategy, details,
+        )
+        self.experience.treatment_finished(
+            experience_id, self._scope_id, True, details or {}, treatment_id=treatment_id,
+        )
         return experience_id
 
     def record_active_treatment(
@@ -173,10 +181,91 @@ class TDService:
         experience_id = self.context["recovery"].get("active_experience_id")
         if not experience_id:
             return
-        self.experience.treatment_started(experience_id, self._scope_id, strategy)
-        self.experience.treatment_finished(
-            experience_id, self._scope_id, success, details or {},
+        treatment_id = self.experience.treatment_started(
+            experience_id, self._scope_id, strategy, details,
         )
+        self.experience.treatment_finished(
+            experience_id, self._scope_id, success, details or {}, treatment_id=treatment_id,
+        )
+
+    def record_semantic_validation_attempt(
+        self,
+        phase: str,
+        message: str,
+        *,
+        operation_id: str,
+        error_code: str,
+        final_attempt: bool,
+    ) -> str:
+        """Record each model repair attempt before a semantic failure becomes terminal."""
+        recovery = self.context["recovery"]
+        experience_id = recovery.get("active_experience_id")
+        signature = {
+            "phase": phase,
+            "cause": "semantic_validation_failed",
+            "error_code": error_code,
+        }
+        if not experience_id:
+            experience_id = self._observe_failure(
+                phase,
+                "semantic_validation_failed",
+                message,
+                visibility="system",
+                signature=signature,
+                source_refs={"operation_ids": [operation_id]},
+            )
+        treatment_id = recovery.get("active_treatment_id")
+        if not treatment_id:
+            treatment_id = self.experience.treatment_started(
+                experience_id,
+                self._scope_id,
+                "repair_phase_output",
+                {
+                    "phase": phase,
+                    "source_refs": {"operation_ids": [operation_id]},
+                },
+            )
+            recovery["active_treatment_id"] = treatment_id
+        if final_attempt:
+            self.experience.treatment_finished(
+                experience_id,
+                self._scope_id,
+                False,
+                {
+                    "reason": message,
+                    "source_refs": {"operation_ids": [operation_id]},
+                },
+                treatment_id=treatment_id,
+            )
+            recovery.pop("active_treatment_id", None)
+            recovery["active_treatment_finished"] = True
+        self.repository.save(self.context)
+        return experience_id
+
+    def apply_experience_decisions(self, decisions: list[dict[str, Any]]) -> None:
+        candidates = {
+            str(item.get("experience_id")): item
+            for item in self.context["recovery"].get("experience_candidates", [])
+        }
+        for decision in decisions:
+            experience_id = str(decision.get("experience_id", ""))
+            if experience_id not in candidates:
+                continue
+            choice = str(decision.get("decision", ""))
+            reason = str(decision.get("reason", "")).strip() or "model experience decision"
+            if choice == "adopt":
+                confidence = max(0.0, min(1.0, float(decision.get("confidence", 0.0))))
+                self.experience.adopt(experience_id, self._scope_id, reason, confidence)
+                self.context["recovery"]["adopted_experience_id"] = experience_id
+                self.experience.treatment_started(
+                    experience_id,
+                    self._scope_id,
+                    "adopted_experience_resolution",
+                    {"reason": reason, "confidence": confidence},
+                )
+            elif choice == "reject":
+                self.experience.reject(experience_id, self._scope_id, reason)
+        self.repository.save(self.context)
 
     def begin_runtime_treatment(
         self,
@@ -188,8 +277,14 @@ class TDService:
         details: dict[str, Any] | None = None,
     ) -> str:
         """Persist a recoverable runtime failure without forcing a state transition."""
-        experience_id = self._observe_failure(phase, cause, message)
-        self.experience.treatment_started(experience_id, self._scope_id, strategy)
+        experience_id = self._observe_failure(
+            phase, cause, message,
+            source_refs=self._source_refs_from_details(details),
+        )
+        treatment_id = self.experience.treatment_started(
+            experience_id, self._scope_id, strategy, details,
+        )
+        self.context["recovery"]["active_treatment_id"] = treatment_id
         if details:
             self.context["recovery"]["treatment_details"] = copy.deepcopy(details)
         self.repository.save(self.context)
@@ -212,6 +307,21 @@ class TDService:
 
     def fail_runtime_terminal(self, phase: str, cause: str, message: str) -> TDState:
         """End an internally unrecoverable run and leave a material failure artifact."""
+        if not self.context["recovery"].get("active_experience_id"):
+            experience_id = self._observe_failure(phase, cause, message)
+            self.experience.treatment_started(
+                experience_id, self._scope_id, "terminal_failure",
+                {"phase": phase, "cause": cause},
+            )
+        else:
+            last_failure = self.context["recovery"].get("last_failure") or {}
+            last_failure.update({
+                "terminal_phase": phase,
+                "terminal_cause": cause,
+                "terminal_message": message,
+                "terminal_at": utc_now(),
+            })
+            self.context["recovery"]["last_failure"] = last_failure
         payload = {
             "type": "toe_dac_failure_report",
             "user_thread_id": self.context["user_thread_id"],
@@ -230,13 +340,24 @@ class TDService:
             f"failure-{self.context['session_id']}.json",
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         )
+        active_experience_id = self.context["recovery"].get("active_experience_id")
+        if active_experience_id:
+            self.experience.record_outcome(
+                active_experience_id,
+                self._scope_id,
+                "failed",
+                {
+                    "phase": phase,
+                    "cause": cause,
+                    "source_refs": {"artifact_refs": [artifact_ref]},
+                },
+            )
 
         def mutation() -> None:
-            if not self.context["recovery"].get("active_experience_id"):
-                self._observe_failure(phase, cause, message)
             self._finish_active_treatment(False, {
                 "terminal": True,
                 "artifact_ref": artifact_ref,
+                "source_refs": {"artifact_refs": [artifact_ref]},
             })
             if artifact_ref not in self.context.setdefault("artifacts", []):
                 self.context["artifacts"].append(artifact_ref)
@@ -335,6 +456,11 @@ class TDService:
                 "current_action_id": self._first_ready_action(normalized),
                 "completed_action_ids": [],
             })
+            if self._active_failure_phase() == "decide":
+                self._finish_active_treatment(True, {
+                    "plan_id": normalized["plan_id"],
+                    "plan_version": normalized["version"],
+                })
 
         return self._transition("plan_accepted", mutation, {"action_count": len(plan["actions"])})
 
@@ -696,7 +822,17 @@ class TDService:
             {"phase": phase, "cause": cause},
         )
 
-    def _observe_failure(self, phase: str, cause: str, message: str, action_summary: str = "") -> str:
+    def _observe_failure(
+        self,
+        phase: str,
+        cause: str,
+        message: str,
+        action_summary: str = "",
+        *,
+        visibility: str | None = None,
+        signature: dict[str, Any] | None = None,
+        source_refs: dict[str, Any] | None = None,
+    ) -> str:
         if self.context["recovery"].get("active_experience_id"):
             self._finish_active_treatment(False, {
                 "superseded_by_failure": {"phase": phase, "cause": cause},
@@ -709,27 +845,74 @@ class TDService:
             "action_summary": action_summary,
             "occurred_at": utc_now(),
         }
+        effective_signature = signature or {"phase": phase, "cause": cause}
+        self.context["recovery"]["experience_candidates"] = self.experience.match(
+            self._scope_id,
+            effective_signature,
+            limit=3,
+        )
         experience_id = self.experience.observe_exception(
             scope_id=self._scope_id,
             user_thread_id=self.context["user_thread_id"],
             td_id=self.context["td_id"],
             session_id=self.context["session_id"],
             exception=failure,
+            visibility=visibility or self._experience_visibility(cause),
+            signature=effective_signature,
+            source_refs=source_refs,
         )
         self.context["recovery"]["last_failure"] = failure
         self.context["recovery"]["active_experience_id"] = experience_id
         self.context["recovery"].pop("adopted_experience_id", None)
         return experience_id
 
+    @staticmethod
+    def _experience_visibility(cause: str) -> str:
+        return "system" if cause in {
+            "invalid_model_output",
+            "skill_or_model_runtime_failed",
+            "skill_execution_failed",
+            "semantic_validation_exhausted",
+        } else "thread"
+
+    @staticmethod
+    def _source_refs_from_details(details: dict[str, Any] | None) -> dict[str, Any]:
+        if not details:
+            return {}
+        refs = copy.deepcopy(details.get("source_refs", {}))
+        mapping = {
+            "operation_id": "operation_ids",
+            "artifact_ref": "artifact_refs",
+            "evidence_ref": "evidence_refs",
+        }
+        for source_key, target_key in mapping.items():
+            value = details.get(source_key)
+            if value:
+                refs.setdefault(target_key, []).append(value)
+        return refs
+
     def _finish_active_treatment(self, success: bool, details: dict[str, Any]) -> None:
         recovery = self.context["recovery"]
         active = recovery.get("active_experience_id")
         adopted = recovery.get("adopted_experience_id")
         for experience_id in dict.fromkeys(item for item in (active, adopted) if item):
-            self.experience.treatment_finished(experience_id, self._scope_id, success, details)
+            if experience_id == active and recovery.get("active_treatment_finished"):
+                continue
+            self.experience.treatment_finished(
+                experience_id,
+                self._scope_id,
+                success,
+                details,
+                treatment_id=(
+                    recovery.get("active_treatment_id") if experience_id == active else None
+                ),
+            )
         if active or adopted:
             recovery["active_experience_id"] = None
+            recovery.pop("active_treatment_id", None)
+            recovery.pop("active_treatment_finished", None)
             recovery.pop("adopted_experience_id", None)
+            recovery["experience_candidates"] = []
 
     def _active_failure_phase(self) -> str | None:
         if not self.context["recovery"].get("active_experience_id"):

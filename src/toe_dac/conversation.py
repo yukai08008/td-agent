@@ -726,8 +726,13 @@ class ConversationController:
                 self.service.submit_observation(observation)
             except ValidationError as exc:
                 invalid_observation = result.get("observation")
-                self._record_semantic_rejection(
+                operation_id = self._record_semantic_rejection(
                     "observe", invalid_observation if isinstance(invalid_observation, dict) else result, exc,
+                )
+                self.service.record_semantic_validation_attempt(
+                    "observe", str(exc), operation_id=operation_id,
+                    error_code=self._semantic_error_code("observe", exc),
+                    final_attempt=attempt == 1,
                 )
                 if attempt == 0:
                     phase_context["repair_feedback"] = {
@@ -762,7 +767,12 @@ class ConversationController:
                 estimate, changes = self._control_plane().normalize_estimate(estimate)
                 self._record_control_plane_changes("estimate", changes)
             except ValidationError as exc:
-                self._record_semantic_rejection("estimate", result, exc)
+                operation_id = self._record_semantic_rejection("estimate", result, exc)
+                self.service.record_semantic_validation_attempt(
+                    "estimate", str(exc), operation_id=operation_id,
+                    error_code=self._semantic_error_code("estimate", exc),
+                    final_attempt=attempt == 1,
+                )
                 if attempt == 0:
                     phase_context["repair_feedback"] = {
                         "errors": exc.errors, "invalid_estimate": result.get("estimate"),
@@ -782,7 +792,12 @@ class ConversationController:
             try:
                 state = self.service.submit_estimate(estimate)
             except ValidationError as exc:
-                self._record_semantic_rejection("estimate", estimate, exc)
+                operation_id = self._record_semantic_rejection("estimate", estimate, exc)
+                self.service.record_semantic_validation_attempt(
+                    "estimate", str(exc), operation_id=operation_id,
+                    error_code=self._semantic_error_code("estimate", exc),
+                    final_attempt=attempt == 1,
+                )
                 if attempt == 0:
                     no_progress = any("no new facts" in item for item in exc.errors)
                     phase_context["repair_feedback"] = {
@@ -844,8 +859,13 @@ class ConversationController:
                 self.service.submit_plan(plan)
             except ValidationError as exc:
                 invalid_plan = result.get("plan")
-                self._record_semantic_rejection(
+                operation_id = self._record_semantic_rejection(
                     "decide", invalid_plan if isinstance(invalid_plan, dict) else result, exc,
+                )
+                self.service.record_semantic_validation_attempt(
+                    "decide", str(exc), operation_id=operation_id,
+                    error_code=self._semantic_error_code("decide", exc),
+                    final_attempt=attempt == 1,
                 )
                 if attempt == 0:
                     phase_context["repair_feedback"] = {
@@ -1298,6 +1318,8 @@ class ConversationController:
                 "运行时已经规定：网页截图及同类原始证据保存在 Session canonical evidence directory；"
                 "该位置本身就是正式证据位置，无需复制到 ./evidence/ 或 Artifact 目录。"
                 "你可以先调用 load_skill 和加载后开放的技能工具获取完成本阶段所需的信息；"
+                "若 payload 提供 experience_candidates，必须基于当前事实独立判断，"
+                "通过 experience_decisions 明确 adopt 或 reject；不得因历史经验而跳过当前证据。"
                 "取得结果后必须调用指定的阶段提交工具。模型不能直接改变状态。"
             ),
             payload={
@@ -1305,6 +1327,9 @@ class ConversationController:
                 "conversation": [{"role": item["role"], "content": item["content"]} for item in history],
                 "phase_context": phase_context,
                 "storage_contract": control_plane.storage_contract(),
+                "experience_candidates": self.service.context["recovery"].get(
+                    "experience_candidates", [],
+                ),
                 "retry_budget": self.service.context["recovery"]["retry_budget"],
             },
             tool_name=tool_name,
@@ -1336,6 +1361,9 @@ class ConversationController:
         evidence_records = control_plane.evidence_records_from_tool_events(result.skill_events)
         if evidence_records:
             self.service.register_evidence(evidence_records)
+        experience_decisions = result.data.get("experience_decisions", [])
+        if isinstance(experience_decisions, list) and experience_decisions:
+            self.service.apply_experience_decisions(experience_decisions)
         if failed_skill_events:
             summary = "; ".join(str(item.get("error", "skill failed")) for item in failed_skill_events)
             self.service.begin_runtime_treatment(
@@ -1376,6 +1404,19 @@ class ConversationController:
                 details={"operation_id": operation_id, "model_id": result.model_id},
             )
         return result.data
+
+    @staticmethod
+    def _semantic_error_code(phase: str, error: ValidationError) -> str:
+        message = str(error).casefold()
+        if "redundantly relocates screenshot evidence" in message:
+            return "plan.screenshot_relocation_conflict"
+        if "actions must be a non-empty list" in message:
+            return "plan.empty_after_normalization"
+        if "no new facts" in message or "re-observation produced no new facts" in message:
+            return "estimate.no_observation_progress"
+        if "must be a non-empty list" in message:
+            return f"{phase}.required_list_empty"
+        return f"{phase}.semantic_validation"
 
     def _ask_human(self, result: dict[str, Any], phase: str) -> ConversationEvent:
         question = str(result.get("question", "")).strip()

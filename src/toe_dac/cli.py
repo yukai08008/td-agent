@@ -31,6 +31,7 @@ from .config_manager import (
     run_config_manager,
 )
 from .environment import find_project_root, load_environment
+from .experience import ExperienceStore
 from .releases import forwarded_version_args, package_spec
 from .update_check import notify_if_update_available
 from .llm_adapter import TOEDACLLMAdapter
@@ -219,6 +220,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--execute", action="store_true",
         help="perform the verified migration; without this flag only report a dry run",
     )
+    experience_parser = subparsers.add_parser("experience", help="inspect reusable exception experience")
+    experience_subparsers = experience_parser.add_subparsers(
+        dest="experience_command", required=True,
+    )
+    experience_list = experience_subparsers.add_parser("list", help="list indexed experiences")
+    experience_list.add_argument("--visibility", choices=["thread", "system"])
+    experience_list.add_argument("--limit", type=int, default=20)
+    experience_show = experience_subparsers.add_parser("show", help="show one experience and trace refs")
+    experience_show.add_argument("experience_id")
+    experience_subparsers.add_parser("rebuild", help="rebuild index.json from append-only ledger.jsonl")
     return parser
 
 
@@ -346,6 +357,45 @@ def main() -> None:
             print(f"Human inputs:   {report_data['metrics']['human_interrupts']}")
             print(f"Operations:     {report_data['operation_count']}")
             print(f"Workspace:      {report_data['artifacts']['workspace']}")
+    elif command == "experience":
+        store = ExperienceStore(repository.root)
+        if args.experience_command == "rebuild":
+            index = store.rebuild_index()
+            print(json.dumps({
+                "status": "rebuilt",
+                "experience_count": len(index["experiences"]),
+                "ledger": str(store.ledger_path),
+                "index": str(store.index_path),
+            }, ensure_ascii=False, indent=2))
+        elif args.experience_command == "show":
+            try:
+                value = store.get(args.experience_id)
+            except KeyError:
+                parser.error(f"unknown experience: {args.experience_id}")
+            print(json.dumps({"experience_id": args.experience_id, **value}, ensure_ascii=False, indent=2))
+        else:
+            index = store.index()
+            items = []
+            for experience_id, value in index["experiences"].items():
+                if args.visibility and value.get("visibility", "thread") != args.visibility:
+                    continue
+                items.append({
+                    "experience_id": experience_id,
+                    "visibility": value.get("visibility", "thread"),
+                    "phase": value.get("signature", {}).get("phase"),
+                    "cause": value.get("signature", {}).get("cause"),
+                    "error_code": value.get("signature", {}).get("error_code"),
+                    "stats": store.stats(experience_id),
+                    "resolution_count": len(value.get("resolutions", [])),
+                    "source_refs": value.get("source_refs", {}),
+                })
+            items.sort(
+                key=lambda item: (
+                    item["resolution_count"], item["stats"].get("success_count", 0),
+                ),
+                reverse=True,
+            )
+            print(json.dumps(items[:max(0, args.limit)], ensure_ascii=False, indent=2))
     elif command in {"chat", "continue"}:
         config_path = model_config_path(getattr(args, "model_config", None))
         try:

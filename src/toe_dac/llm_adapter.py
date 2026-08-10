@@ -461,6 +461,20 @@ DETERMINISTIC_CHECK_SCHEMA = {
     "required": ["type"],
 }
 
+EXPERIENCE_DECISIONS_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "experience_id": {"type": "string"},
+            "decision": {"type": "string", "enum": ["adopt", "reject"]},
+            "reason": {"type": "string"},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+        "required": ["experience_id", "decision", "reason", "confidence"],
+    },
+}
+
 
 TARGET_TOOL_SCHEMA = {
     "type": "object",
@@ -468,6 +482,7 @@ TARGET_TOOL_SCHEMA = {
         "status": {"type": "string", "enum": ["accepted", "needs_human"]},
         "question": {"type": "string"},
         "reason": {"type": "string"},
+        "experience_decisions": EXPERIENCE_DECISIONS_SCHEMA,
         "target": {
             "type": "object",
             "properties": {
@@ -499,6 +514,7 @@ OBSERVATION_TOOL_SCHEMA = {
         "status": {"type": "string", "enum": ["accepted", "needs_human"]},
         "question": {"type": "string"},
         "reason": {"type": "string"},
+        "experience_decisions": EXPERIENCE_DECISIONS_SCHEMA,
         "observation": {
             "type": "object",
             "properties": {
@@ -529,6 +545,7 @@ ESTIMATE_TOOL_SCHEMA = {
         "status": {"type": "string", "enum": ["accepted", "needs_human"]},
         "question": {"type": "string"},
         "reason": {"type": "string"},
+        "experience_decisions": EXPERIENCE_DECISIONS_SCHEMA,
         "estimate": {
             "type": "object",
             "properties": {
@@ -549,6 +566,7 @@ PLAN_TOOL_SCHEMA = {
         "status": {"type": "string", "enum": ["accepted", "needs_observation", "needs_human"]},
         "question": {"type": "string"},
         "reason": {"type": "string"},
+        "experience_decisions": EXPERIENCE_DECISIONS_SCHEMA,
         "observation_request": {"type": "array", "items": {"type": "string"}},
         "plan": {
             "type": "object",
@@ -596,6 +614,7 @@ ACTION_EXECUTION_TOOL_SCHEMA = {
         "status": {"type": "string", "enum": ["accepted", "needs_human"]},
         "question": {"type": "string"},
         "reason": {"type": "string"},
+        "experience_decisions": EXPERIENCE_DECISIONS_SCHEMA,
         "result": {
             "type": "object",
             "properties": {
@@ -614,6 +633,7 @@ CHECK_TOOL_SCHEMA = {
         "status": {"type": "string", "enum": ["accepted", "needs_human"]},
         "question": {"type": "string"},
         "reason": {"type": "string"},
+        "experience_decisions": EXPERIENCE_DECISIONS_SCHEMA,
         "checks": {
             "type": "array",
             "minItems": 1,

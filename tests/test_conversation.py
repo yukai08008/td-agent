@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from toe_dac.conversation import ConversationController
+from toe_dac.experience import ExperienceStore
 from toe_dac.llm_adapter import LLMOutputError, StructuredLLMResult
 from toe_dac.states import TDState
 from toe_dac.validation import ValidationError
@@ -733,6 +734,132 @@ def test_report_plan_that_forbids_screenshot_relocation_is_valid(repository):
             }],
         }],
     })
+
+
+def test_model_can_adopt_cross_thread_system_experience_and_update_effectiveness(repository):
+    signature = {
+        "phase": "decide",
+        "cause": "semantic_validation_failed",
+        "error_code": "plan.screenshot_relocation_conflict",
+    }
+    seed_store = ExperienceStore(repository.root)
+    prior_id = seed_store.observe_exception(
+        scope_id="ut_prior", user_thread_id="ut_prior", td_id="td_prior", session_id="ss_prior",
+        exception={**signature, "message": "否定的截图复制语句被误判为迁移"},
+        visibility="system", signature=signature,
+    )
+    seed_store.record_resolution(prior_id, "ut_prior", {
+        "type": "control_rule", "instruction": "识别否定词，不要删除报告 Action",
+    })
+    seed_treatment = seed_store.treatment_started(prior_id, "ut_prior", "fix_negation_rule")
+    seed_store.treatment_finished(
+        prior_id, "ut_prior", True, {"version": "0.6.1"}, treatment_id=seed_treatment,
+    )
+    invalid_plan = {
+        "plan_id": "plan-invalid", "version": 1,
+        "actions": [{
+            "action_id": "report-copy", "objective": "生成报告并复制截图", "depends_on": [],
+            "instruction": "生成中文报告，然后复制截图到其他目录", "executor": "agent_response",
+            "assertions": [{"description": "报告和截图副本存在", "required": True}],
+            "max_attempts": 2,
+        }],
+    }
+    valid_plan = {
+        "plan_id": "plan-valid", "version": 2,
+        "actions": [{
+            "action_id": "write-report", "objective": "写入中文报告", "depends_on": [],
+            "instruction": "引用现有截图生成报告，不复制截图", "executor": "external",
+            "assertions": [{"description": "报告存在", "required": True}],
+            "max_attempts": 2,
+        }],
+    }
+    adapter = FakeStructuredAdapter([
+        {"status": "accepted", "reason": "错误计划", "plan": invalid_plan},
+        {
+            "status": "accepted", "reason": "采纳历史修复方案", "plan": valid_plan,
+            "experience_decisions": [{
+                "experience_id": prior_id, "decision": "adopt",
+                "reason": "同一控制规则冲突，历史方案已有成功记录", "confidence": 0.95,
+            }],
+        },
+    ])
+    controller = ConversationController.open(repository, adapter, "ut_current")
+    service = controller.service
+    service.start()
+    service.submit_target(_target())
+    service.submit_observation({
+        "facts": [{
+            "description": "截图已保存在 Session trace/screenshots/proof.png",
+            "source_type": "tool", "source_ref": "proof.png",
+        }],
+        "unknowns": [],
+    })
+    service.submit_estimate(_estimate())
+
+    events = __import__("asyncio").run(controller.handle_user_events("继续"))
+
+    assert service.state == TDState.ACTING
+    assert events[-1].type == "executor_boundary"
+    prior = seed_store.get(prior_id)
+    assert prior["match_count"] == 1
+    assert prior["adopt_count"] == 1
+    assert prior["success_count"] == 2
+    current = next(
+        item for key, item in seed_store.rebuild_index()["experiences"].items()
+        if key != prior_id and item.get("signature", {}).get("error_code") == signature["error_code"]
+    )
+    assert current["visibility"] == "system"
+    assert current["success_count"] == 1
+    assert current["failure_count"] == 0
+    assert len(current["source_refs"]["operation_ids"]) == 1
+
+
+def test_repeated_plan_validation_failure_records_complete_terminal_experience(repository):
+    invalid_plan = {
+        "plan_id": "plan-invalid", "version": 1,
+        "actions": [{
+            "action_id": "report-copy", "objective": "生成报告并复制截图", "depends_on": [],
+            "instruction": "生成中文报告，然后复制截图到其他目录", "executor": "agent_response",
+            "assertions": [{"description": "报告和截图副本存在", "required": True}],
+            "max_attempts": 2,
+        }],
+    }
+    adapter = FakeStructuredAdapter([
+        {"status": "accepted", "reason": "错误计划一", "plan": invalid_plan},
+        {"status": "accepted", "reason": "错误计划二", "plan": invalid_plan},
+    ])
+    controller = ConversationController.open(repository, adapter, "ut_terminal_experience")
+    service = controller.service
+    service.start()
+    service.submit_target(_target())
+    service.submit_observation({
+        "facts": [{
+            "description": "截图已保存在 Session trace/screenshots/proof.png",
+            "source_type": "tool", "source_ref": "proof.png",
+        }],
+        "unknowns": [],
+    })
+    service.submit_estimate(_estimate())
+
+    __import__("asyncio").run(controller.handle_user_events("继续"))
+
+    assert service.state == TDState.FAILED
+    experience = next(
+        item for item in service.experience.rebuild_index()["experiences"].values()
+        if item.get("signature", {}).get("error_code") == "plan.screenshot_relocation_conflict"
+    )
+    assert experience["visibility"] == "system"
+    assert experience["use_count"] == 1
+    assert experience["success_count"] == 0
+    assert experience["failure_count"] == 1
+    assert experience["treatments"][0]["status"] == "failed"
+    assert len(experience["source_refs"]["operation_ids"]) == 2
+    assert len(experience["source_refs"]["artifact_refs"]) == 1
+    assert experience["last_outcome"]["outcome"] == "failed"
+    artifact = repository.root / experience["source_refs"]["artifact_refs"][0]
+    failure_report = __import__("json").loads(artifact.read_text(encoding="utf-8"))
+    assert failure_report["last_failure"]["cause"] == "semantic_validation_failed"
+    assert failure_report["last_failure"]["terminal_cause"] == "semantic_validation_exhausted"
 
 
 def _prepare_bad_screenshot_archive_plan(controller):

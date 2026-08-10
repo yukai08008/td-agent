@@ -76,9 +76,10 @@ Tagged standalone execution is supported from `v0.2.0`. Set `TOE_DAC_DATA` only 
 
 ## Current release
 
-The current source version is `v0.6.1`. Every TOE-DAC stage retains model judgment, while a deterministic control plane handles canonical file persistence, evidence registration, protocol normalization, hard checks, and bounded runtime recovery. This patch also prevents negated instructions such as “do not copy the screenshot” from being mistaken for a relocation Action.
+The current source version is `v0.7.0`. Every TOE-DAC stage retains model judgment, while a deterministic control plane handles canonical file persistence, evidence registration, protocol normalization, hard checks, and bounded runtime recovery. Exception handling now forms a persistent experience loop with scoped retrieval, explicit model adoption, treatment outcomes, and traceable resolutions.
 
 See [模型判断与确定性控制边界](docs/model-control-boundary.md) for the stage-by-stage contract.
+See [异常经验闭环](docs/experience-loop.md) for persistence, privacy, matching, and adoption rules.
 
 [Complete version record](versions.md) · [GitHub Releases](https://github.com/yukai08008/td-agent/releases)
 
@@ -172,7 +173,7 @@ Each stage has one responsibility:
 5. **Act** executes one atomic action and records structured evidence.
 6. **Check** distinguishes action completion from actual target achievement.
 
-The model proposes structured outputs; deterministic validation and the state machine decide whether a transition is accepted. Invalid outputs are logged, repaired within budget, and escalated to a human when automatic recovery cannot continue.
+The model proposes structured outputs; deterministic validation and the state machine decide whether a transition is accepted. Invalid outputs are logged and repaired within budget. Similar experience is retrieved by structured signature, but the model must explicitly adopt or reject it before use.
 
 ## Persistence Model
 
@@ -268,6 +269,6 @@ uv build
 
 ## Current Scope
 
-The POC currently covers persistent Threads and Sessions, the TOE-DAC state chain, deterministic structured validation, Target repair, a bounded `agent_response` Executor, Action/Target checks, recovery budgets, human interruption, progressive skills, and exception experience tracking.
+The POC currently covers persistent Threads and Sessions, the TOE-DAC state chain, deterministic structured validation, Target repair, a bounded `agent_response` Executor, Action/Target checks, recovery budgets, human interruption, progressive skills, and the exception experience loop.
 
-Executors that mutate files, run commands, or operate remote systems remain restricted and stop at an explicit boundary. Parent/child TD orchestration, richer evidence capture, and semantic experience retrieval are still under development.
+Executors that mutate files, run commands, or operate remote systems remain restricted and stop at an explicit boundary. Parent/child TD orchestration and richer evidence capture are still under development.

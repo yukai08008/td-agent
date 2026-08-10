@@ -9,6 +9,7 @@
 
 | 版本 | 日期 | 版本主题 | 详细说明 |
 | --- | --- | --- | --- |
+| `v0.7.0` | 2026-08-10 | 异常经验检索、采纳与效果闭环 | [版本说明](docs/releases/v0.7.0.md) |
 | `v0.6.1` | 2026-08-10 | 修复截图迁移否定语义误判 | [版本说明](docs/releases/v0.6.1.md) |
 | `v0.6.0` | 2026-08-10 | 模型判断与确定性控制层协作 | [版本说明](docs/releases/v0.6.0.md) |
 | `v0.5.0` | 2026-08-09 | Storage V2 与可验证迁移 | [版本说明](docs/releases/v0.5.0.md) |
@@ -29,4 +30,4 @@
 - README 只描述当前版本；完整历史以本页和 Releases 为准。
 
 [查看所有 Releases](https://github.com/yukai08008/td-agent/releases) ·
-[比较 v0.6.0...v0.6.1](https://github.com/yukai08008/td-agent/compare/v0.6.0...v0.6.1)
+[比较 v0.6.1...v0.7.0](https://github.com/yukai08008/td-agent/compare/v0.6.1...v0.7.0)

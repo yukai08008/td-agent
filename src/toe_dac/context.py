@@ -46,6 +46,7 @@ def new_context(user_thread_id: str, td_id: str, session_id: str, retry_budget: 
             "last_failure": None,
             "decision": None,
             "active_experience_id": None,
+            "experience_candidates": [],
         },
         "control": {
             "paused_from": None,

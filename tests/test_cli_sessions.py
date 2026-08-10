@@ -26,6 +26,18 @@ def test_data_override_is_hidden_from_normal_help():
     assert "--data" not in help_text
 
 
+def test_experience_commands_have_explicit_read_and_rebuild_modes():
+    show = build_parser().parse_args(["experience", "show", "exp_12345678"])
+    listing = build_parser().parse_args([
+        "experience", "list", "--visibility", "system", "--limit", "5",
+    ])
+    rebuild = build_parser().parse_args(["experience", "rebuild"])
+
+    assert (show.experience_command, show.experience_id) == ("show", "exp_12345678")
+    assert (listing.visibility, listing.limit) == ("system", 5)
+    assert rebuild.experience_command == "rebuild"
+
+
 def test_terminal_td_attach_error_reports_td_state(repository):
     service = TDService.create(repository, "ut_terminal_attach")
     service.cancel()
