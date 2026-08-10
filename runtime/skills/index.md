@@ -33,3 +33,12 @@ Only skills with a concrete, current purpose belong in this index.
 - Order: 30
 - Requires: tool:alex_serp_search
 - Phases: observe
+
+## run-cmd
+
+- Path: run-cmd/SKILL.md
+- Description: 按需启动、查询和终止异步 Bash 命令，适用于 SSH、Git、Docker 和系统命令等通用执行场景。
+- Enabled: true
+- Order: 40
+- Requires: cli:bash, cli:python3
+- Phases: observe, act, action_check, target_check

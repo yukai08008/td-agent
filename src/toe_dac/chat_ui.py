@@ -16,7 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.theme import Theme
 
-from state_machine import TransitionError
+from .state_machine import TransitionError
 
 from .conversation import ConversationController
 from .events import ConversationEvent
@@ -257,6 +257,8 @@ class ChatUI:
             self.console.print(Panel(body, title="需要你的确认", border_style="yellow", expand=False))
         elif event.type in {"executor_boundary", "recovery_required"}:
             self.console.print(Panel(event.message, title="执行边界", border_style="yellow", expand=False))
+        elif event.type == "background_job_running":
+            self.console.print(Panel(event.message, title="后台任务运行中", border_style="cyan", expand=False))
         elif event.visible:
             self.console.print(Panel(Markdown(event.message), title="Agent", border_style="cyan", expand=False))
 

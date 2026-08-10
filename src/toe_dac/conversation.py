@@ -198,6 +198,11 @@ class ConversationController:
                     result = await runner()
                 except LLMOutputError as exc:
                     duration_ms = round((time.monotonic() - phase_started) * 1000, 1)
+                    previous_failure = self.service.context.get("recovery", {}).get("last_failure") or {}
+                    repeated_failure = (
+                        previous_failure.get("phase") == phase
+                        and previous_failure.get("message") == str(exc)
+                    )
                     self.repository.record_operation(
                         self.service.context, "phase_run", "failed", phase=phase,
                         error_type=type(exc).__name__, error=str(exc),
@@ -205,35 +210,45 @@ class ConversationController:
                     )
                     operation_id = self._record_llm_output_failure(phase, exc)
                     used = self.service.runtime_retry_count(phase)
-                    if used >= budget:
+                    transport_exhausted = exc.category == "model_transport"
+                    effective_budget = min(budget, 1) if repeated_failure else budget
+                    if transport_exhausted:
+                        effective_budget = used
+                    if used >= effective_budget:
                         self.service.fail_runtime_terminal(
                             phase, "runtime_retry_budget_exhausted", str(exc),
                         )
                         message = (
-                            f"{phase} 自动恢复已用尽 {used}/{budget} 次，TD 已明确失败。"
-                            "失败原因和尝试轨迹已写入 Artifact。"
+                            (f"{phase} 模型传输层自动恢复已用尽，TD 已明确失败。"
+                             if transport_exhausted else
+                             f"{phase} 自动恢复已用尽 {used}/{effective_budget} 次，TD 已明确失败。")
+                            + "失败原因和尝试轨迹已写入 Artifact。"
                         )
                         self._record_assistant(message, {
                             "phase": phase, "operation_id": operation_id,
-                            "retry_count": used, "retry_budget": budget,
+                            "retry_count": used, "retry_budget": effective_budget,
+                            "repeated_failure": repeated_failure,
+                            "transport_exhausted": transport_exhausted,
                         })
                         return ConversationEvent(
                             "terminal", message, phase=phase,
-                            data={"state": "failed", "operation_id": operation_id},
+                            data={"state": "failed", "operation_id": operation_id,
+                                  "repeated_failure": repeated_failure,
+                                  "transport_exhausted": transport_exhausted},
                         )
                     used = self.service.register_runtime_retry(phase)
                     message = (
                         f"{phase} 本次调用失败（{duration_ms / 1000:.1f}s），"
-                        f"正在自动换路径重试 {used}/{budget}。"
+                        f"正在自动换路径重试 {used}/{effective_budget}。"
                     )
                     self._record_assistant(message, {
                         "phase": phase, "operation_id": operation_id,
-                        "retry_count": used, "retry_budget": budget,
+                        "retry_count": used, "retry_budget": effective_budget,
                     })
                     emit(ConversationEvent(
                         "automatic_retry", message, phase=phase,
                         data={"operation_id": operation_id, "retry_count": used,
-                              "retry_budget": budget, "duration_ms": duration_ms},
+                              "retry_budget": effective_budget, "duration_ms": duration_ms},
                     ))
                     continue
                 except Exception as exc:
@@ -283,7 +298,7 @@ class ConversationController:
                     event = await run_phase("decide", self._run_decide)
                 elif state == TDState.ACTING:
                     action = self.service.current_action()
-                    if self._action_executor(action) != "agent_response":
+                    if self._action_executor(action) not in {"agent_response", "skill_script"}:
                         reply = (
                             "当前 Action 需要外部受限 Executor，尚未获得可自动执行的授权或能力："
                             f"{action['objective']}"
@@ -311,6 +326,8 @@ class ConversationController:
                     emit(ConversationEvent("terminal", reply, data={"state": state.value}))
                     break
                 emit(event)
+                if event.type == "background_job_running":
+                    break
                 if self.service.state in TERMINAL_STATES | {TDState.WAITING_HUMAN}:
                     break
         except Exception:
@@ -378,6 +395,14 @@ class ConversationController:
             message = (
                 f"模型调用失败，用时 {float(progress.get('duration_ms', 0)) / 1000:.1f}s："
                 f"{progress.get('error_type', 'runtime error')}"
+            )
+        elif kind == "model_transport_retry":
+            error = progress.get("error", {})
+            error_type = error.get("error_type", "transport error") if isinstance(error, dict) else "transport error"
+            message = (
+                f"模型连接异常（{error_type}），"
+                f"{float(progress.get('delay_seconds', 0)):.1f}s 后重试 "
+                f"{int(progress.get('attempt', 0)) + 1}/{progress.get('max_attempts', '?')}"
             )
         elif kind == "skill_loaded":
             message = f"技能已加载：{', '.join(progress.get('skills', []))}"
@@ -599,8 +624,12 @@ class ConversationController:
                 "submit_target",
                 TARGET_TOOL_SCHEMA,
                 "只定义清晰、可验证的目标。存在实质歧义时必须请求人类，不得进入后续阶段。"
-                "证据由运行时存入 Session 的 canonical evidence directory；"
-                "用户未指定其他位置时，不得创造 ./evidence/ 等额外归档目录或复制要求。"
+                "Target 只定义用户要达成的结果、明确指定的方法与验收语义；"
+                "能力、凭据、连通性和可行性由 Observe/Estimate 验证。"
+                "不得因当前尚未验证能力而降级或替换用户明确要求的方法；"
+                "不得增加浏览器、搜索、截图、日志、证据目录或归档方式为 Target 内容。"
+                "证据留存是每个阶段的运行时不变量，不属于 Target 效果或验收标准；"
+                "即使用户要求留证，也由控制层自动实现，Target 只保留业务效果。"
                 "能机械验收的 acceptance criterion 必须填写 check；复合条件拆成多个 criterion。"
                 "只有确实需要语义判断时才使用 check.type=semantic。",
                 phase_context,
@@ -826,19 +855,22 @@ class ConversationController:
             "observation": self.service.context["observation"],
             "estimate": self.service.context["estimate"],
             "user_adjustment": self.service.context.get("control", {}).get("waiting_reason"),
-            "available_executors": ["agent_response", "external_boundary"],
+            "available_executors": ["agent_response", "skill_script", "external_boundary"],
         }
         for attempt in range(2):
             result = await self._generate(
                 "decide", "submit_plan", PLAN_TOOL_SCHEMA,
                 "生成有依赖、断言和尝试预算的原子 Action 列表。不得执行 Action。"
-                "executor=agent_response 可自动执行；executor=external 只用于 Target 明确要求的外部变更，"
+                "executor=agent_response 用于生成回复；executor=skill_script 用于通过已加载 Skill 的脚本"
+                "执行命令或其他操作；executor=external 只用于当前没有 Skill 能力的外部变更，"
                 "并会停在授权边界。搜索、访问、读取、抓取等事实收集属于 Observe，不得作为 Action；"
                 "需要补充事实时返回 status=needs_observation 和 observation_request。"
                 "不得引入 Target 验收标准未要求的新范围。截图位于 canonical evidence directory 时"
                 "已经完成留证，不得规划复制、移动或再次归档截图的 Action。"
                 "每个 assertion 只表达一个条件；能机械检查时必须填写 check，"
-                "只有不可计算的语义质量判断使用 check.type=semantic。",
+                "只有不可计算的语义质量判断使用 check.type=semantic。"
+                "会改变服务、文件、配置或其他外部状态的 Action 必须设置 changes_state=true；"
+                "证据采集不是独立 Action，由 Act 运行时自动按 before/action/after 留存。",
                 phase_context,
             )
             if self._needs_human(result):
@@ -884,13 +916,27 @@ class ConversationController:
 
     async def _run_act(self) -> ConversationEvent:
         action = self.service.current_action()
+        executor = self._action_executor(action)
+        if executor == "skill_script":
+            phase_rule = (
+                "执行当前 skill_script Action。必须先加载适用 Skill，再调用其开放的脚本完成操作；"
+                "不得把计划或命令文本冒充执行结果。只有脚本工具返回真实结果后才能提交，result.content "
+                "应准确概括 job_id、状态、输出、退出码以及下一步。如果后台任务仍为 running，不得声称完成。"
+                "如果 action.changes_state=true，必须按顺序调用脚本留存状态："
+                "变更前查询使用 evidence_role=before，实际变更使用 evidence_role=action，"
+                "变更后验证使用 evidence_role=after。"
+            )
+        else:
+            phase_rule = (
+                "只执行当前 agent_response Action：基于已有 Target、Observation、Estimate 和 Plan 生成面向用户的最终内容。"
+                "不得再次规划、搜索或声称执行了外部操作。存在 previous_action_checks 时，必须针对"
+                "其中未通过的断言修正上次结果，不得原样重复。"
+            )
         result = await self._generate(
             "act",
             "submit_action_execution",
             ACTION_EXECUTION_TOOL_SCHEMA,
-            "只执行当前 agent_response Action：基于已有 Target、Observation、Estimate 和 Plan 生成面向用户的最终内容。"
-            "不得再次规划、搜索或声称执行了外部操作。存在 previous_action_checks 时，必须针对"
-            "其中未通过的断言修正上次结果，不得原样重复。",
+            phase_rule,
             {
                 "target": self.service.context["target"],
                 "observation": self.service.context["observation"],
@@ -908,6 +954,41 @@ class ConversationController:
         )
         if self._needs_human(result):
             return self._ask_human(result, "act")
+        running_job = self._running_skill_job(result.get("_runtime_skill_events", []))
+        if executor == "skill_script" and running_job:
+            job_id = str(running_job.get("job_id", "unknown"))
+            message = (
+                f"后台命令 `{job_id}` 仍在运行，当前 Action 保持在 Act 阶段。"
+                "你可以继续与会话交互；稍后输入“继续”即可查询增量输出并推进验收。"
+            )
+            self._record_assistant(message, {
+                "phase": "act",
+                "background_job": running_job,
+                "action_id": action["action_id"],
+            })
+            return ConversationEvent(
+                "background_job_running",
+                message,
+                phase="act",
+                data={"action_id": action["action_id"], "background_job": running_job},
+            )
+        if executor == "skill_script" and not any(
+            item.get("tool") == "run_skill_script" and item.get("status") == "succeeded"
+            for item in result.get("_runtime_skill_events", [])
+        ):
+            raise ValidationError(["skill_script Action must execute a successful run_skill_script call"])
+        if executor == "skill_script" and action.get("changes_state") is True:
+            evidence_roles = {
+                str(item.get("evidence_role", ""))
+                for item in result.get("_runtime_skill_events", [])
+                if item.get("tool") == "run_skill_script" and item.get("status") == "succeeded"
+            }
+            missing_roles = {"before", "action", "after"} - evidence_roles
+            if missing_roles:
+                raise ValidationError([
+                    "state-changing skill_script Action requires before/action/after evidence; "
+                    f"missing: {', '.join(sorted(missing_roles))}",
+                ])
         execution = self._required_object(result, "result")
         content = str(execution.get("content", "")).strip()
         if not content:
@@ -919,17 +1000,37 @@ class ConversationController:
         )
         self.service.submit_action_result({
             "result": {
-                "executor": "agent_response",
+                "executor": executor,
                 "content": content,
                 "summary": execution.get("summary", ""),
             },
             "evidence_refs": [artifact_ref],
         })
-        text = f"Act 完成：{action['action_id']} 已产生候选回复，开始 Action Check。"
+        text = (
+            f"Act 完成：{action['action_id']} 已执行 Skill 脚本，开始 Action Check。"
+            if executor == "skill_script"
+            else f"Act 完成：{action['action_id']} 已产生候选回复，开始 Action Check。"
+        )
         return ConversationEvent(
             "phase_completed", text, phase="act",
             data={"action_id": action["action_id"], "artifact_ref": artifact_ref},
         )
+
+    @staticmethod
+    def _running_skill_job(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+        for event in reversed(events):
+            if event.get("skill") != "run-cmd" or event.get("tool") != "run_skill_script":
+                continue
+            evidence = event.get("evidence")
+            if not isinstance(evidence, dict):
+                continue
+            try:
+                payload = json.loads(str(evidence.get("stdout", "")))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(payload, dict) and payload.get("status") == "running" and payload.get("job_id"):
+                return payload
+        return None
 
     async def _run_action_check(self) -> ConversationEvent:
         action = self.service.current_action()
@@ -1087,7 +1188,7 @@ class ConversationController:
     @staticmethod
     def _action_executor(action: dict[str, Any]) -> str:
         explicit = action.get("executor")
-        if explicit in {"agent_response", "external"}:
+        if explicit in {"agent_response", "skill_script", "external"}:
             return str(explicit)
         text = f"{action.get('objective', '')} {action.get('instruction', '')}"
         response_markers = ("向用户", "回复", "输出", "汇报", "报告", "摘要", "deliver")
@@ -1256,6 +1357,39 @@ class ConversationController:
                 "Target invents a non-canonical ./evidence directory; screenshots are retained "
                 "in the Session canonical evidence directory unless the user explicitly requests another location",
             ])
+        positive_text = " ".join(str(item).casefold() for item in target.get("positive", []))
+        errors: list[str] = []
+        explicit_method_groups = (
+            (("ssh", "root", "登录"), "SSH/root login"),
+            (("docker", "容器"), "Docker/container"),
+        )
+        for markers, label in explicit_method_groups:
+            if any(marker in user_text for marker in markers) and not any(
+                marker in positive_text for marker in markers
+            ):
+                errors.append(
+                    f"Target dropped the user-specified {label} method; feasibility belongs to Observe/Estimate"
+                )
+        positive_and_criteria = " ".join([
+            positive_text,
+            *(
+                str(item.get("description", "")).casefold()
+                for item in target.get("acceptance_criteria", [])
+                if isinstance(item, dict)
+            ),
+        ])
+        optional_method_groups = (
+            (("浏览器", "browser"), "browser"),
+            (("搜索", "search", "serp", "百度"), "search"),
+            (("截图", "screenshot"), "screenshot"),
+        )
+        for markers, label in optional_method_groups:
+            if any(marker in positive_and_criteria for marker in markers) and not any(
+                marker in user_text for marker in markers
+            ):
+                errors.append(f"Target invented an unrequested {label} execution/evidence requirement")
+        if errors:
+            raise ValidationError(errors)
 
     def _record_semantic_rejection(
         self,
@@ -1315,8 +1449,12 @@ class ConversationController:
             phase=phase,
             system_prompt=(
                 f"你是 TOE-DAC 的 {phase.upper()} 决策器。{phase_rule}"
-                "运行时已经规定：网页截图及同类原始证据保存在 Session canonical evidence directory；"
-                "该位置本身就是正式证据位置，无需复制到 ./evidence/ 或 Artifact 目录。"
+                + ("" if phase == "target" else (
+                    "运行时会自动留存当前阶段的原始证据："
+                    "命令行/API 保存 JSON，Web 操作保存截图及页面元数据；"
+                    "证据文件以阶段名为前缀，无需你规划目录、复制或归档。"
+                ))
+                +
                 "你可以先调用 load_skill 和加载后开放的技能工具获取完成本阶段所需的信息；"
                 "若 payload 提供 experience_candidates，必须基于当前事实独立判断，"
                 "通过 experience_decisions 明确 adopt 或 reject；不得因历史经验而跳过当前证据。"
@@ -1324,9 +1462,12 @@ class ConversationController:
             ),
             payload={
                 "current_state": self.service.state.value,
-                "conversation": [{"role": item["role"], "content": item["content"]} for item in history],
+                "conversation": (
+                    [{"role": item["role"], "content": item["content"]} for item in history]
+                    if phase == "target" else []
+                ),
                 "phase_context": phase_context,
-                "storage_contract": control_plane.storage_contract(),
+                "storage_contract": control_plane.storage_contract() if phase != "target" else None,
                 "experience_candidates": self.service.context["recovery"].get(
                     "experience_candidates", [],
                 ),
@@ -1358,7 +1499,16 @@ class ConversationController:
             )
             if failed:
                 failed_skill_events.append(skill_event)
-        evidence_records = control_plane.evidence_records_from_tool_events(result.skill_events)
+        evidence_records = control_plane.evidence_records_from_tool_events(
+            result.skill_events, phase=phase,
+        )
+        model_evidence = control_plane.persist_json_evidence(
+            phase,
+            "model-output",
+            {key: value for key, value in result.data.items() if key != "_runtime_skill_events"},
+            evidence_role="decision",
+        )
+        evidence_records.append(model_evidence)
         if evidence_records:
             self.service.register_evidence(evidence_records)
         experience_decisions = result.data.get("experience_decisions", [])
@@ -1403,6 +1553,7 @@ class ConversationController:
                 strategy="repair_structured_output",
                 details={"operation_id": operation_id, "model_id": result.model_id},
             )
+        result.data["_runtime_skill_events"] = result.skill_events
         return result.data
 
     @staticmethod

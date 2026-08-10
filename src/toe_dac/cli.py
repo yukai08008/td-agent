@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from state_machine import TransitionError
+from .state_machine import TransitionError
 
 from .e2e import CaseRegistry, E2ERunner
 from .conversation import ConversationController
@@ -25,12 +25,13 @@ from .cli_settings import (
     user_config_dir,
 )
 from .config_manager import (
+    environment_root,
     ensure_model_ready,
     initialize_user_config,
     print_config_status,
     run_config_manager,
 )
-from .environment import find_project_root, load_environment
+from .environment import load_environment
 from .experience import ExperienceStore
 from .releases import forwarded_version_args, package_spec
 from .update_check import notify_if_update_available
@@ -234,13 +235,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    project_root = find_project_root()
-    if (project_root / "src" / "toe_dac").is_dir():
-        load_environment(project_root)
-    else:
-        load_environment(user_config_dir())
     parser = build_parser()
     args = parser.parse_args()
+    initialize_user_config()
+    selected_config = getattr(args, "model_config", None)
+    environment_directory = (
+        environment_root(selected_config)
+        if selected_config
+        else user_config_dir()
+    )
+    load_environment(environment_directory)
     if args.use_version:
         try:
             selected_package = package_spec(args.use_version)

@@ -1,6 +1,11 @@
 """OpenAI-compatible LLM client."""
 
+import asyncio
+import http.client
 import json
+import socket
+import ssl
+import urllib.error
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 import logging
@@ -10,6 +15,16 @@ from .http_transport import HTTPResponseError, post_json
 from .node.node import Message, MessageRole, LLMResponse, ToolCall, ToolType
 
 logger = logging.getLogger(__name__)
+
+
+class ModelTransportError(ConnectionError):
+    def __init__(self, attempts: list[dict[str, Any]]):
+        self.attempts = attempts
+        last = attempts[-1] if attempts else {}
+        super().__init__(
+            f"model transport exhausted after {len(attempts)} attempt(s): "
+            f"{last.get('error_type', 'unknown')}: {last.get('error', '')}"
+        )
 
 
 class OpenAIClient(LLMClientBase):
@@ -49,20 +64,62 @@ class OpenAIClient(LLMClientBase):
             "Authorization": f"Bearer {self.api_key}",
         }
 
-        try:
-            response_data = await post_json(request_url, headers, request_data)
-            parsed_response = self._parse_response(response_data)
-            self._log_response(response_data, parsed_response, request_id)
-            return parsed_response
-        except HTTPResponseError as e:
-            logger.error("HTTP error in OpenAI client: %s", e)
-            raise
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error in OpenAI client: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error in OpenAI client: {e}")
-            raise
+        attempts: list[dict[str, Any]] = []
+        max_attempts = max(1, int(self.retry_config.max_retries) + 1)
+        transient_errors = (
+            http.client.IncompleteRead,
+            http.client.RemoteDisconnected,
+            ConnectionResetError,
+            TimeoutError,
+            socket.timeout,
+            ssl.SSLError,
+            urllib.error.URLError,
+            json.JSONDecodeError,
+        )
+        for attempt_number in range(1, max_attempts + 1):
+            try:
+                response_data = await post_json(
+                    request_url, headers, request_data, timeout=45,
+                )
+                parsed_response = self._parse_response(response_data)
+                self._log_response(response_data, parsed_response, request_id)
+                return parsed_response
+            except HTTPResponseError as exc:
+                retryable = exc.status in self.retry_config.retry_on_status
+                attempts.append({
+                    "attempt": attempt_number,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "status": exc.status,
+                    "retryable": retryable,
+                })
+                if not retryable:
+                    raise
+            except transient_errors as exc:
+                attempts.append({
+                    "attempt": attempt_number,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "retryable": True,
+                })
+            except Exception:
+                raise
+            if attempt_number >= max_attempts:
+                raise ModelTransportError(attempts)
+            delay = min(
+                self.retry_config.base_delay
+                * (self.retry_config.backoff_factor ** (attempt_number - 1)),
+                self.retry_config.max_delay,
+            )
+            if self.retry_callback:
+                self.retry_callback({
+                    "attempt": attempt_number,
+                    "max_attempts": max_attempts,
+                    "delay_seconds": delay,
+                    "error": attempts[-1],
+                })
+            await asyncio.sleep(delay)
+        raise ModelTransportError(attempts)
 
     def _prepare_request(
         self,

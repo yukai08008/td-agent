@@ -67,8 +67,8 @@
 ### 5.3 预期阶段路径
 
 ```text
-Target
-→ Observe（加载 agent-browser，访问页面，提取标题和正文，保存截图）
+Target（只定义页面事实与中文报告效果，不将截图写入 Target）
+→ Observe（加载 agent-browser，访问页面，提取标题和正文，运行时自动保存截图）
 → Estimate（判断证据足够且可行）
 → Decide（只规划中文报告，不把网页访问错误放进 Action）
 → Act（生成报告 Artifact）
@@ -90,7 +90,7 @@ Target
 | 标题 | Observation 包含 `Example Domain` |
 | 主要内容 | Observation 说明该域名用于文档/示例用途 |
 | 报告 | Artifact 存在，包含中文字符、标题和主要内容 |
-| 截图 | Session `screenshots/` 下至少一个文件；PNG 签名正确且大小大于 8 字节 |
+| 截图 | 作为 Observe 运行时不变量，Session `screenshots/` 下至少一个 `observe-*.png`；PNG 签名正确且大小大于 8 字节 |
 | 双层检查 | Action Check 与 Target Check 均通过 |
 | 人工介入 | `human_interrupts == 0` |
 | 留痕 | operation 中存在浏览器调用；event、operation、messages、evidence 均可回溯 |

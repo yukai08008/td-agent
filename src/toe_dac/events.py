@@ -11,6 +11,7 @@ ConversationEventType = Literal[
     "progress",
     "human_question",
     "executor_boundary",
+    "background_job_running",
     "recovery_required",
     "paused",
     "terminal",

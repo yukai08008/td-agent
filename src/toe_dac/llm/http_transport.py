@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -28,7 +29,19 @@ def _post_json(
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read().decode("utf-8")
+            try:
+                raw_body = response.read()
+            except http.client.IncompleteRead as exc:
+                # Some OpenAI-compatible gateways close after writing a complete
+                # JSON body but before satisfying Content-Length. Salvage only
+                # when the partial bytes are independently valid JSON.
+                partial = exc.partial.decode("utf-8", errors="replace")
+                try:
+                    value = json.loads(partial)
+                except json.JSONDecodeError:
+                    raise
+                return value
+            body = raw_body.decode("utf-8")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise HTTPResponseError(exc.code, body) from exc

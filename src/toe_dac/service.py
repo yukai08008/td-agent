@@ -5,12 +5,11 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from state_machine import Machine, TransitionError
-
 from .context import utc_now
 from .experience import ExperienceStore
 from .graph import build_td_graph
 from .states import TDState, TERMINAL_STATES
+from .state_machine import Machine, TransitionError
 from .storage import TDRepository, short_id
 from .validation import (
     ValidationError,
@@ -313,15 +312,14 @@ class TDService:
                 experience_id, self._scope_id, "terminal_failure",
                 {"phase": phase, "cause": cause},
             )
-        else:
-            last_failure = self.context["recovery"].get("last_failure") or {}
-            last_failure.update({
-                "terminal_phase": phase,
-                "terminal_cause": cause,
-                "terminal_message": message,
-                "terminal_at": utc_now(),
-            })
-            self.context["recovery"]["last_failure"] = last_failure
+        last_failure = self.context["recovery"].get("last_failure") or {}
+        last_failure.update({
+            "terminal_phase": phase,
+            "terminal_cause": cause,
+            "terminal_message": message,
+            "terminal_at": utc_now(),
+        })
+        self.context["recovery"]["last_failure"] = last_failure
         payload = {
             "type": "toe_dac_failure_report",
             "user_thread_id": self.context["user_thread_id"],
@@ -362,8 +360,13 @@ class TDService:
             if artifact_ref not in self.context.setdefault("artifacts", []):
                 self.context["artifacts"].append(artifact_ref)
 
+        terminal_event = (
+            "estimate_not_feasible"
+            if self.state == TDState.ESTIMATING and cause == "not_feasible"
+            else "runtime_budget_exhausted"
+        )
         return self._transition(
-            "runtime_budget_exhausted",
+            terminal_event,
             mutation,
             {"phase": phase, "cause": cause, "artifact_ref": artifact_ref},
         )
@@ -515,7 +518,7 @@ class TDService:
             )
         if self.state == TDState.WAITING_HUMAN:
             return self._transition(
-                "observation_input_received",
+                "user_reobserve_requested",
                 lambda: self.context["control"].update({
                     "waiting_reason": reason or "user requested another observation pass",
                     "return_to": None,
@@ -551,7 +554,7 @@ class TDService:
                     self.context["plan"]["status"] = "revision_requested"
 
             return self._transition(
-                "decision_input_received",
+                "user_replan_requested",
                 waiting_replan_mutation,
                 {"reason": reason, "control_override": "replan"},
             )

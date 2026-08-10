@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from toe_dac.conversation import ConversationController
@@ -16,13 +18,15 @@ class FakeStructuredAdapter:
 
     async def generate_structured(self, **kwargs):
         self.calls.append(kwargs)
-        data = self.responses.pop(0)
+        data = dict(self.responses.pop(0))
+        skill_events = data.pop("_skill_events", [])
         return StructuredLLMResult(
             data=data,
             model_id="fake-model",
             usage={"input": 1, "output": 1},
             finish_reason="tool_calls",
             raw_content=None,
+            skill_events=skill_events,
         )
 
 
@@ -88,6 +92,28 @@ class FlakyObserveAdapter(FakeStructuredAdapter):
                 attempts=[{"stage": "initial", "status": "failed", "raw_output": "bad"}],
             )
         return await super().generate_structured(**kwargs)
+
+
+class ExhaustedTransportAdapter:
+    def __init__(self):
+        self.calls = 0
+
+    async def generate_structured(self, **kwargs):
+        self.calls += 1
+        raise LLMOutputError(
+            "model runtime failed: ModelTransportError: transport exhausted",
+            model_id="deepseek-v4-flash",
+            category="model_transport",
+            attempts=[{
+                "stage": "model_transport",
+                "status": "failed",
+                "error_type": "ModelTransportError",
+                "transport_attempts": [
+                    {"attempt": 1, "error_type": "IncompleteRead"},
+                    {"attempt": 2, "error_type": "RemoteDisconnected"},
+                ],
+            }],
+        )
 
 
 def _target():
@@ -412,7 +438,7 @@ def test_repeated_invalid_target_asks_human_instead_of_crashing(repository):
     assert any(item["failure_count"] == 1 for item in experiences)
 
 
-def test_malformed_target_tool_json_retries_then_ends_failed(repository):
+def test_repeated_malformed_target_tool_json_stops_after_one_path_retry(repository):
     controller = ConversationController.open(repository, BrokenToolArgumentsAdapter(), "ut_bad_json")
     session_id = controller.service.context["session_id"]
 
@@ -421,7 +447,7 @@ def test_malformed_target_tool_json_retries_then_ends_failed(repository):
     assert controller.service.state == TDState.FAILED
     assert events[-1].type == "terminal"
     assert controller.service.context["recovery"]["last_failure"]["cause"] == "skill_or_model_runtime_failed"
-    assert controller.service.context["recovery"]["runtime_retry_counts"]["target"] == 3
+    assert controller.service.context["recovery"]["runtime_retry_counts"]["target"] == 1
     assert any("failure-" in item for item in controller.service.context["artifacts"])
 
     operations = repository.operation_log(controller.service.context)
@@ -461,7 +487,7 @@ def test_successful_json_repair_is_logged_as_successful_experience(repository):
     assert experience["success_count"] == 1
 
 
-def test_observe_skill_runtime_failure_retries_then_ends_failed(repository):
+def test_repeated_observe_skill_runtime_failure_stops_after_one_path_retry(repository):
     controller = ConversationController.open(repository, ObserveRuntimeFailureAdapter(), "ut_skill_failure")
 
     events = __import__("asyncio").run(controller.handle_user_events("查询上海天气"))
@@ -469,7 +495,7 @@ def test_observe_skill_runtime_failure_retries_then_ends_failed(repository):
     assert controller.service.state == TDState.FAILED
     assert events[-1].type == "terminal"
     assert "明确失败" in events[-1].message
-    assert controller.service.context["recovery"]["runtime_retry_counts"]["observe"] == 3
+    assert controller.service.context["recovery"]["runtime_retry_counts"]["observe"] == 1
     operations = repository.operation_log(controller.service.context)
     failed = [item for item in operations if item.get("operation") == "generate_structured"][-1]
     assert failed["status"] == "failed"
@@ -522,6 +548,19 @@ def test_transient_observe_failure_recovers_and_continues_to_completion(reposito
         if item["exception"]["cause"] == "skill_or_model_runtime_failed"
     )
     assert experience["success_count"] == 1
+
+
+def test_exhausted_transport_does_not_retry_the_whole_phase(repository):
+    adapter = ExhaustedTransportAdapter()
+    controller = ConversationController.open(repository, adapter, "ut_transport_exhausted")
+
+    events = __import__("asyncio").run(controller.handle_user_events("收集主机资源信息"))
+
+    assert adapter.calls == 1
+    assert controller.service.state == TDState.FAILED
+    assert events[-1].type == "terminal"
+    assert events[-1].data["transport_exhausted"] is True
+    assert "模型传输层自动恢复已用尽" in events[-1].message
 
 
 def test_agent_response_action_runs_checks_persists_artifact_and_succeeds(repository):
@@ -583,6 +622,124 @@ def test_agent_response_action_runs_checks_persists_artifact_and_succeeds(reposi
     assert service.context["checks"]["target_check"]["passed"] is True
     artifact_ref = service.context["artifacts"][0]
     assert (repository.root / artifact_ref).read_text(encoding="utf-8").startswith("# 上海天气")
+
+
+def test_running_skill_script_action_returns_control_without_completing_action(repository):
+    job_payload = {
+        "ok": True,
+        "job_id": "cmd-1234abcd",
+        "status": "running",
+        "supervisor_pid": 1234,
+    }
+    adapter = FakeStructuredAdapter([{
+        "status": "accepted",
+        "reason": "后台命令已启动",
+        "result": {"content": "后台命令 cmd-1234abcd 正在运行"},
+        "_skill_events": [{
+            "skill": "run-cmd",
+            "tool": "run_skill_script",
+            "status": "succeeded",
+            "evidence": {"stdout": json.dumps(job_payload)},
+        }],
+    }])
+    controller = ConversationController.open(repository, adapter, "ut_async_skill_action")
+    service = controller.service
+    service.start()
+    service.submit_target(_target())
+    service.submit_observation(_observation())
+    service.submit_estimate(_estimate())
+    service.submit_plan({
+        "plan_id": "plan_async",
+        "version": 1,
+        "actions": [{
+            "action_id": "run_async",
+            "objective": "异步执行检查命令",
+            "depends_on": [],
+            "instruction": "使用 run-cmd 启动后台命令",
+            "executor": "skill_script",
+            "assertions": [{"description": "命令退出码为 0", "required": True}],
+            "max_attempts": 2,
+        }],
+    })
+
+    events = __import__("asyncio").run(controller.handle_user_events("继续"))
+
+    assert service.state == TDState.ACTING
+    assert events[-1].type == "background_job_running"
+    assert events[-1].data["background_job"]["job_id"] == "cmd-1234abcd"
+    assert service.context["execution"]["attempts"] == []
+    assert service.context["artifacts"] == []
+
+
+def test_state_changing_action_requires_and_persists_before_after_evidence(repository):
+    skill_events = [
+        {
+            "skill": "run-cmd", "tool": "run_skill_script", "status": "succeeded",
+            "evidence_role": role, "raw_output": {"ok": True, "role": role},
+            "evidence": {"stdout": json.dumps({"status": "completed", "role": role})},
+        }
+        for role in ("before", "action", "after")
+    ]
+    adapter = FakeStructuredAdapter([{
+        "status": "accepted", "reason": "变更和验证已完成",
+        "result": {"content": "配置变更已完成，变更后状态正常"},
+        "_skill_events": skill_events,
+    }])
+    controller = ConversationController.open(repository, adapter, "ut_act_before_after")
+    service = controller.service
+    service.start()
+    service.submit_target(_target())
+    service.submit_observation(_observation())
+    service.submit_estimate(_estimate())
+    service.submit_plan({
+        "plan_id": "plan_change", "version": 1,
+        "actions": [{
+            "action_id": "change_config", "objective": "修改配置", "depends_on": [],
+            "instruction": "修改前查询、执行修改、修改后验证",
+            "executor": "skill_script", "changes_state": True,
+            "assertions": [{"description": "变更后配置正常", "required": True}],
+            "max_attempts": 2,
+        }],
+    })
+
+    event = __import__("asyncio").run(controller._run_act())
+
+    assert event.type == "phase_completed"
+    raw_evidence = [
+        item for item in service.context["evidence_registry"]
+        if item["type"] == "raw_json" and item["phase"] == "act"
+    ]
+    names = {__import__("pathlib").Path(item["path"]).name for item in raw_evidence}
+    assert any(name.startswith("act-before-") for name in names)
+    assert any(name.startswith("act-action-") for name in names)
+    assert any(name.startswith("act-after-") for name in names)
+
+
+def test_state_changing_action_rejects_missing_after_evidence(repository):
+    adapter = FakeStructuredAdapter([{
+        "status": "accepted", "reason": "未验证", "result": {"content": "已执行"},
+        "_skill_events": [{
+            "skill": "run-cmd", "tool": "run_skill_script", "status": "succeeded",
+            "evidence_role": "action", "raw_output": {"ok": True},
+            "evidence": {"stdout": "{}"},
+        }],
+    }])
+    controller = ConversationController.open(repository, adapter, "ut_act_missing_after")
+    service = controller.service
+    service.start()
+    service.submit_target(_target())
+    service.submit_observation(_observation())
+    service.submit_estimate(_estimate())
+    service.submit_plan({
+        "actions": [{
+            "action_id": "change", "objective": "修改配置", "depends_on": [],
+            "instruction": "修改配置", "executor": "skill_script", "changes_state": True,
+            "assertions": [{"description": "配置正常", "required": True}], "max_attempts": 1,
+        }],
+    })
+
+    with pytest.raises(ValidationError, match="before/action/after evidence"):
+        __import__("asyncio").run(controller._run_act())
 
 
 def test_estimate_mechanical_fields_are_filled_without_another_model_call(repository):
@@ -660,7 +817,7 @@ def test_agent_response_report_can_mention_access_time_without_false_acquisition
 def test_target_noncanonical_evidence_directory_is_normalized_without_model_retry(repository):
     invalid_target = {
         **_target(),
-        "positive": ["保留网页截图，默认复制到 ./evidence/"],
+        "positive": [*_target()["positive"], "保留网页截图作为证据，默认复制到 ./evidence/"],
     }
     adapter = FakeStructuredAdapter([
         {"status": "accepted", "reason": "错误增加目录", "target": invalid_target},
@@ -679,6 +836,43 @@ def test_target_noncanonical_evidence_directory_is_normalized_without_model_retr
         if item.get("operation") == "deterministic_normalization" and item.get("phase") == "target"
     ]
     assert normalization[-1]["status"] == "succeeded"
+
+
+def test_target_cannot_replace_explicit_ssh_login_with_external_recon(repository):
+    downgraded = {
+        "positive": ["通过浏览器和搜索收集目标 IP 的公开信息"],
+        "negative": ["不使用 root 登录"],
+        "acceptance_criteria": [{
+            "description": "保留浏览器截图", "required": True,
+        }],
+    }
+    corrected = {
+        "positive": [
+            "以 root 身份通过 SSH 登录 45.126.120.34",
+            "收集系统、CPU、内存、磁盘和容器信息",
+        ],
+        "negative": ["不执行破坏性变更"],
+        "acceptance_criteria": [{
+            "description": "形成服务器资源勘查报告", "required": True,
+        }],
+    }
+    adapter = FakeStructuredAdapter([
+        {"status": "accepted", "reason": "降级", "target": downgraded},
+        {"status": "accepted", "reason": "保留用户方法", "target": corrected},
+        {"status": "needs_human", "reason": "stop after target", "question": "continue?"},
+    ])
+    controller = ConversationController.open(repository, adapter, "ut_target_fidelity")
+
+    __import__("asyncio").run(controller.handle_user_events(
+        "使用 root 通过 SSH 登录 45.126.120.34，查看系统和服务器资源",
+    ))
+
+    target_calls = [call for call in adapter.calls if call["phase"] == "target"]
+    assert len(target_calls) == 2
+    assert "repair_feedback" in target_calls[1]["payload"]["phase_context"]
+    errors = target_calls[1]["payload"]["phase_context"]["repair_feedback"]["errors"]
+    assert any("dropped the user-specified SSH/root login method" in item for item in errors)
+    assert controller.service.context["target"]["positive"] == corrected["positive"]
 
 
 def test_plan_cannot_relocate_existing_screenshot_evidence(repository):

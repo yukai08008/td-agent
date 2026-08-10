@@ -61,9 +61,9 @@ def _web_target():
         "positive": ["访问 https://example.com 并生成报告"],
         "negative": ["不得猜测网页内容"],
         "acceptance_criteria": [{
-            "description": "网页截图已保留",
+            "description": "报告包含页面标题和主要内容",
             "required": True,
-            "check": {"type": "evidence_exists", "evidence_type": "screenshot"},
+            "check": {"type": "non_empty"},
         }],
     }
 
@@ -81,12 +81,14 @@ def test_runtime_evidence_is_mechanically_hashed_after_model_selected_tool(repos
         "agent_browser_observe", {"url": "https://example.com"},
     ))
     plane = DeterministicControlPlane(repository, service.context, object())
-    records = plane.evidence_records_from_tool_events([tool_result.event])
+    records = plane.evidence_records_from_tool_events([tool_result.event], phase="observe")
     service.register_evidence(records)
 
-    assert records[0]["sha256"]
-    assert records[0]["path"].startswith(str(repository.session_evidence_dir(service.context)))
-    assert records[0]["metadata"]["page_title"] == "Example Domain"
+    screenshot_record = next(item for item in records if item["type"] == "screenshot")
+    assert screenshot_record["sha256"]
+    assert screenshot_record["path"].startswith(str(repository.session_evidence_dir(service.context)))
+    assert screenshot_record["metadata"]["page_title"] == "Example Domain"
+    assert Path(screenshot_record["path"]).name.startswith("observe-")
     assert service.context["evidence_registry"][0]["type"] == "screenshot"
 
 
@@ -111,6 +113,27 @@ def test_plan_normalization_removes_mechanical_evidence_and_acceptance_actions(r
     assert [action["action_id"] for action in plan["actions"]] == ["report"]
     assert plan["actions"][0]["assertions"][0]["check"] == {"type": "language_zh"}
     assert len(changes) >= 3
+
+
+def test_target_normalization_removes_runtime_evidence_requirements(repository):
+    service = TDService.create(repository, "ut_target_effect_only")
+    plane = DeterministicControlPlane(repository, service.context, object())
+
+    target, changes = plane.normalize_target({
+        "positive": ["生成中文网页报告", "保留网页截图作为证据"],
+        "negative": ["不猜测网页内容"],
+        "acceptance_criteria": [
+            {"description": "报告包含页面主要内容", "required": True},
+            {"description": "截图证据已留存", "required": True,
+             "check": {"type": "evidence_exists", "evidence_type": "screenshot"}},
+        ],
+    }, "生成中文网页报告并留证")
+
+    assert target["positive"] == ["生成中文网页报告"]
+    assert [item["description"] for item in target["acceptance_criteria"]] == [
+        "报告包含页面主要内容",
+    ]
+    assert len(changes) == 2
 
 
 def test_report_action_that_mentions_archived_screenshot_is_not_misclassified_as_file_copy(repository):
@@ -208,7 +231,13 @@ def test_controller_keeps_model_judgment_in_observe_and_mechanically_registers_e
 
     assert controller.service.state == TDState.ACTING
     assert [call["phase"] for call in service_adapter.calls] == ["target", "observe", "estimate", "decide"]
-    assert controller.service.context["evidence_registry"][0]["type"] == "screenshot"
+    registry = controller.service.context["evidence_registry"]
+    assert any(item["type"] == "screenshot" for item in registry)
+    raw_paths = [Path(item["path"]) for item in registry if item["type"] == "raw_json"]
+    assert raw_paths
+    assert {path.name.split("-", 1)[0] for path in raw_paths} >= {
+        "target", "observe", "estimate", "decide",
+    }
     assert any(event.phase == "observe" and event.type == "phase_completed" for event in events)
 
 

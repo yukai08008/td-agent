@@ -100,7 +100,7 @@ stateDiagram-v2
     waiting_human --> recovering : recovery_input_received
 ```
 
-用户只提交 Action Check 结果。控制层验证断言后，根据 Action 游标发送 `advance_action` 或 `actions_completed`。之所以使用两个事件，是因为当前 `andy-state` 不会在同一源状态的同名事件分支中继续尝试第二个 Guard。
+用户只提交 Action Check 结果。控制层验证断言后，根据 Action 游标发送 `advance_action` 或 `actions_completed`。两个事件分别表达“当前动作通过并继续”与“全部动作完成”，日志无需反查 Guard 即可理解转移语义。底层 Graph 已支持同一状态对之间的多条平行边，以及同一事件下按 Guard 选择目标状态。
 
 ## 6. 事件定义
 
@@ -166,6 +166,16 @@ stateDiagram-v2
 | `has_human_return_state` | 答复事件与 `return_to`、等待原因相匹配 |
 
 Guard 只判断是否允许转移，不执行外部副作用。
+
+### 7.1 当前实现
+
+- Graph 是有向多重图，边的身份由 `source + event + target` 表达，不再以状态对作为唯一键；
+- Machine 对同一 `source + event` 的候选边逐条评估 Guard，选择第一条通过的边；
+- Guard 异常按 fail-closed 处理，不允许状态转移；
+- `available_events` 只返回当前 Context 下 Guard 已通过的事件；
+- `send()` 对 Context、State 和内存转移日志实行原子回滚；
+- TD 主链、人工等待、恢复决策、Check 结果和终态失败均配置了结构化 Guard；
+- 引擎位于 `toe_dac.state_machine` 命名空间，避免与开发机上的 `andy_state/state_machine` 发生包名冲突。
 
 ## 8. Context 设计
 

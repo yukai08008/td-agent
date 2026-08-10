@@ -17,7 +17,8 @@ from toe_dac.cli_settings import (
 from toe_dac.service import TDService
 
 
-def test_model_resolution_prefers_explicit_default(tmp_path):
+def test_model_resolution_prefers_explicit_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOE_DAC_MODEL", raising=False)
     path = tmp_path / "models.json"
     path.write_text(json.dumps({"models": [
         {"id": "slow", "enabled": True},
@@ -56,3 +57,18 @@ def test_installed_config_uses_xdg_but_runtime_uses_td_agent_home(tmp_path, monk
     assert default_data_dir() == runtime_home / "data"
     assert default_log_dir() == runtime_home / "logs"
     assert credentials_dir() == runtime_home / "credentials"
+
+
+def test_user_model_config_wins_even_inside_source_checkout(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.joinpath("config").mkdir(parents=True)
+    source.joinpath("config/models.json").write_text('{"models": [{"id": "source"}]}')
+    config_home = tmp_path / "config-home"
+    installed = config_home / "td-agent" / "models.json"
+    installed.parent.mkdir(parents=True)
+    installed.write_text('{"models": [{"id": "installed"}]}')
+    monkeypatch.chdir(source)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.delenv("TOE_DAC_MODEL_CONFIG", raising=False)
+
+    assert model_config_path() == installed

@@ -165,6 +165,21 @@ def test_estimate_can_request_another_observation_pass(service, target, observat
     assert service.context["recovery"]["retry_count"] == 1
 
 
+def test_estimate_not_feasible_uses_semantic_terminal_edge(service, target, observation):
+    service.start()
+    service.submit_target(target)
+    service.submit_observation(observation)
+
+    state = service.fail_runtime_terminal(
+        "estimate", "not_feasible", "required host is unreachable",
+    )
+
+    assert state == TDState.FAILED
+    events = service.repository.event_log(service.context)
+    assert events[-1]["event"] == "estimate_not_feasible"
+    assert service.context["artifacts"]
+
+
 def test_estimate_rejects_repeated_observe_without_new_facts(service, target, observation):
     service.start()
     service.submit_target(target)

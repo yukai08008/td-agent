@@ -107,8 +107,10 @@ def validate_plan(data: dict[str, Any]) -> None:
                     assertion.get("check"),
                     f"actions[{index}].assertions[{assertion_index}].check",
                 ))
-        if action.get("executor") not in {None, "agent_response", "external"}:
-            errors.append(f"actions[{index}].executor must be agent_response or external")
+        if action.get("executor") not in {None, "agent_response", "skill_script", "external"}:
+            errors.append(
+                f"actions[{index}].executor must be agent_response, skill_script, or external"
+            )
         try:
             max_attempts = int(action.get("max_attempts", 1))
         except (TypeError, ValueError):

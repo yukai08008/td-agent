@@ -76,6 +76,31 @@ class DeterministicControlPlane:
             return value
 
         normalized = rewrite(normalized)
+        evidence_markers = (
+            "canonical evidence", "evidence directory", "evidence/", "证据目录",
+            "证据留存", "证据留存", "证据归档", "保留为证据",
+            "截图作为证据", "日志作为证据",
+        )
+        positives = []
+        for item in normalized.get("positive", []):
+            text = str(item)
+            if any(marker in text.casefold() for marker in evidence_markers):
+                changes.append("removed runtime evidence handling from Target positive")
+                continue
+            positives.append(item)
+        normalized["positive"] = positives
+        criteria = []
+        for criterion in normalized.get("acceptance_criteria", []):
+            if not isinstance(criterion, dict):
+                criteria.append(criterion)
+                continue
+            description = str(criterion.get("description", "")).casefold()
+            check_type = str((criterion.get("check") or {}).get("type", ""))
+            if check_type == "evidence_exists" or any(marker in description for marker in evidence_markers):
+                changes.append("removed runtime evidence handling from Target acceptance criteria")
+                continue
+            criteria.append(criterion)
+        normalized["acceptance_criteria"] = criteria
         replace_title_expectation = False
         replace_body_expectation = False
         for index, criterion in enumerate(normalized.get("acceptance_criteria", []), start=1):
@@ -167,6 +192,7 @@ class DeterministicControlPlane:
             action.setdefault("action_id", f"action-{index}")
             action.setdefault("depends_on", [])
             action.setdefault("max_attempts", 2)
+            action.setdefault("changes_state", False)
             action.setdefault("assertions", [{
                 "description": "Action produced a non-empty result",
                 "required": True,
@@ -226,6 +252,8 @@ class DeterministicControlPlane:
     def evidence_records_from_tool_events(
         self,
         tool_events: list[dict[str, Any]],
+        *,
+        phase: str,
     ) -> list[dict[str, Any]]:
         """Turn runtime-created files into canonical evidence records.
 
@@ -235,6 +263,20 @@ class DeterministicControlPlane:
         canonical = self.evidence_directory.resolve()
         records: list[dict[str, Any]] = []
         for event in tool_events:
+            raw_payload = event.get("raw_output")
+            if isinstance(raw_payload, dict):
+                records.append(self.persist_json_evidence(
+                    phase,
+                    str(event.get("tool") or "runtime-tool"),
+                    {
+                        "input": event.get("raw_input"),
+                        "output": raw_payload,
+                        "status": event.get("status"),
+                        "error_type": event.get("error_type"),
+                        "error": event.get("error"),
+                    },
+                    evidence_role=str(event.get("evidence_role") or "result"),
+                ))
             if event.get("status") != "succeeded":
                 continue
             payload = event.get("evidence")
@@ -260,6 +302,8 @@ class DeterministicControlPlane:
                 "size_bytes": screenshot.stat().st_size,
                 "sha256": digest,
                 "created_at": payload.get("observed_at") or utc_now(),
+                "phase": phase,
+                "evidence_role": str(event.get("evidence_role") or "result"),
                 "metadata": {
                     "page_title": payload.get("page_title"),
                     "body_text": payload.get("body_text"),
@@ -267,6 +311,42 @@ class DeterministicControlPlane:
                 },
             })
         return records
+
+    def persist_json_evidence(
+        self,
+        phase: str,
+        source: str,
+        payload: dict[str, Any],
+        *,
+        evidence_role: str = "result",
+    ) -> dict[str, Any]:
+        raw_directory = self.repository.session_evidence_dir(self.context) / "raw"
+        raw_directory.mkdir(parents=True, exist_ok=True)
+        raw_directory.chmod(0o700)
+        safe_phase = re.sub(r"[^a-z0-9_-]+", "-", phase.casefold()).strip("-") or "phase"
+        safe_source = re.sub(r"[^a-z0-9_-]+", "-", source.casefold()).strip("-") or "source"
+        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        digest = hashlib.sha256(
+            f"{phase}\n{source}\n{evidence_role}\n{serialized}".encode("utf-8")
+        ).hexdigest()
+        safe_role = re.sub(r"[^a-z0-9_-]+", "-", evidence_role.casefold()).strip("-") or "result"
+        path = raw_directory / f"{safe_phase}-{safe_role}-{safe_source}-{digest[:10]}.json"
+        if not path.exists():
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(serialized, encoding="utf-8")
+            temporary.replace(path)
+        return {
+            "evidence_id": f"evi_{digest[:16]}",
+            "type": "raw_json",
+            "source": source,
+            "phase": phase,
+            "evidence_role": evidence_role,
+            "path": str(path),
+            "mime_type": "application/json",
+            "size_bytes": path.stat().st_size,
+            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "created_at": utc_now(),
+        }
 
     def check_action(self, action: dict[str, Any], attempt: dict[str, Any]) -> DeterministicCheckResult:
         content = str(attempt.get("result", {}).get("content", ""))

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="yukai08008/td-agent"
-LATEST_VERSION="0.7.0"
+LATEST_VERSION="0.8.0"
 TOOL_NAME="toe-dac"
 BIN_NAME="toe-dac"
 INSTALL_DIR="${HOME}/.local/bin"

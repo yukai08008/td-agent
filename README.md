@@ -76,10 +76,11 @@ Tagged standalone execution is supported from `v0.2.0`. Set `TOE_DAC_DATA` only 
 
 ## Current release
 
-The current source version is `v0.7.0`. Every TOE-DAC stage retains model judgment, while a deterministic control plane handles canonical file persistence, evidence registration, protocol normalization, hard checks, and bounded runtime recovery. Exception handling now forms a persistent experience loop with scoped retrieval, explicit model adoption, treatment outcomes, and traceable resolutions.
+The current source version is `v0.8.0`. TOE-DAC now runs on an explicit guarded state-machine multigraph: parallel edges are preserved, critical transitions are protected by context guards, and transition failures roll back state, context, and the in-memory transition log. The release also adds progressive command execution, phase-native evidence, bounded model-transport recovery, and a persistent exception-experience loop.
 
 See [模型判断与确定性控制边界](docs/model-control-boundary.md) for the stage-by-stage contract.
 See [异常经验闭环](docs/experience-loop.md) for persistence, privacy, matching, and adoption rules.
+See [2026-08-11 设计审计与进度总结](docs/progress/2026-08-11.md) for the state-machine audit and current implementation status.
 
 [Complete version record](versions.md) · [GitHub Releases](https://github.com/yukai08008/td-agent/releases)
 

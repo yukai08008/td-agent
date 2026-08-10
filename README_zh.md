@@ -62,7 +62,7 @@ TOE_DAC_UPDATE_CHECK_TIMEOUT=1.5
 
 ```bash
 toe-dac --use-version 0.2.0 --version
-toe-dac --use-version 0.2.0 --data ~/.local/share/td-agent-v0.2 new
+TOE_DAC_DATA=~/.td-agent/versions/v0.2/data toe-dac --use-version 0.2.0 new
 ```
 
 把本机长期固定到指定版本：
@@ -76,7 +76,9 @@ curl -fsSL https://raw.githubusercontent.com/yukai08008/td-agent/main/install.sh
 
 ## 当前版本
 
-当前稳定版本为 [v0.4.3](https://github.com/yukai08008/td-agent/releases/tag/v0.4.3)，安装时持续显示包来源、依赖、缓存位置、uv 阶段输出和等待心跳，并支持启动配置引导和持久化交互。
+当前源码版本为 `v0.8.0`。TD 由带 Guard 的持久化有向多重状态图驱动：平行边不会互相覆盖，关键状态转换会验证 Context 不变量，Guard 或钩子失败时原子回滚。当前版本同时包含渐进式命令 Skill、阶段原生证据、模型传输层恢复和异常经验闭环。
+
+参见 [状态机设计](docs/prototype-state-machine-design.md)、[模型判断与确定性控制边界](docs/model-control-boundary.md) 和 [2026-08-11 设计审计与进度总结](docs/progress/2026-08-11.md)。
 
 [完整版本记录](versions.md) · [GitHub Releases](https://github.com/yukai08008/td-agent/releases)
 

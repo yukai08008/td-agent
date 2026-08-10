@@ -7,19 +7,15 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from .cli_settings import app_home_dir
 from .environment import find_project_root
 
 
-SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
-RUNTIME_FILES = (
-    "skills/index.md",
-    "skills/toe-dac-control/SKILL.md",
-    "skills/agent-browser/SKILL.md",
-    "skills/alex-serp/SKILL.md",
-    "persona/active.json",
-    "persona/blue/system.md",
-    "persona/green/system.md",
+SKILL_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+SKILL_INDEX_ENTRY = re.compile(
+    r"(?ms)^##\s+([a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)\s*$\n(.*?)(?=^##\s+|\Z)"
 )
 
 
@@ -30,6 +26,8 @@ class LoadedSkill:
     body: str
     requires: tuple[str, ...]
     phases: tuple[str, ...] = ()
+    root: str = ""
+    resources: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -75,7 +73,21 @@ class RuntimePromptSnapshot:
             frontmatter, body = _parse_skill(path.read_text(encoding="utf-8"))
             if frontmatter.get("name") != name:
                 raise ValueError(f"skill index/frontmatter name mismatch: {name}")
-            active[name] = LoadedSkill(name, entry.description, body, entry.requires, entry.phases)
+            skill_root = path.parent.resolve()
+            resources = tuple(
+                str(resource.relative_to(skill_root))
+                for resource in sorted(skill_root.rglob("*"))
+                if resource.is_file() and resource != path
+            )
+            active[name] = LoadedSkill(
+                name,
+                str(frontmatter["description"]),
+                body,
+                entry.requires,
+                entry.phases,
+                str(skill_root),
+                resources,
+            )
         ordered = tuple(active[entry.name] for entry in self.available_skills if entry.name in active)
         return replace(self, skills=ordered)
 
@@ -96,31 +108,44 @@ class RuntimePromptSnapshot:
                 "can obtain.\n\n"
                 f"{self.skill_index.strip()}"
             )
-        scoped_skills = tuple(
-            skill for skill in self.skills
-            if not phase or not skill.phases or phase in skill.phases
-        )
-        if scoped_skills:
+        if self.skills:
             rendered_skills = []
-            for skill in scoped_skills:
+            for skill in self.skills:
+                if phase and skill.phases and phase not in skill.phases:
+                    continue
                 requirements = ", ".join(skill.requires) if skill.requires else "none"
+                resources = "\n".join(f"- `{item}`" for item in skill.resources) or "- none"
                 rendered_skills.append(
                     f"### Skill: {skill.name}\n"
-                    f"Required executable capabilities: {requirements}\n\n{skill.body.strip()}"
+                    f"Skill root: `{skill.root}`\n"
+                    "Resolve relative paths in this Skill from its Skill root. Resources are listed "
+                    "for discovery only and are not loaded into context until explicitly needed.\n"
+                    f"Required executable capabilities: {requirements}\n"
+                    f"Bundled resources:\n{resources}\n\n{skill.body.strip()}"
                 )
-            sections.append("## Skills Loaded On Demand\n\n" + "\n\n".join(rendered_skills))
+            if rendered_skills:
+                sections.append("## Skills Loaded On Demand\n\n" + "\n\n".join(rendered_skills))
         sections.append(f"## Current Phase Instructions\n\n{phase_prompt.strip()}")
         return "\n\n".join(sections)
 
 
-def _runtime_resource_text(relative_path: str) -> str:
-    packaged = files("toe_dac").joinpath("resources", "runtime", *relative_path.split("/"))
-    if packaged.is_file():
-        return packaged.read_text(encoding="utf-8")
-    source = find_project_root() / "runtime" / relative_path
-    if source.is_file():
-        return source.read_text(encoding="utf-8")
-    raise FileNotFoundError(f"missing bundled runtime resource: {relative_path}")
+def _runtime_resource_root():
+    packaged = files("toe_dac").joinpath("resources", "runtime")
+    if packaged.is_dir():
+        return packaged
+    source = find_project_root() / "runtime"
+    if source.is_dir():
+        return source
+    raise FileNotFoundError("missing bundled runtime resources")
+
+
+def _runtime_resource_files(root, prefix: str = ""):
+    for child in sorted(root.iterdir(), key=lambda item: item.name):
+        relative_path = f"{prefix}/{child.name}" if prefix else child.name
+        if child.is_dir():
+            yield from _runtime_resource_files(child, relative_path)
+        elif child.is_file():
+            yield relative_path, child
 
 
 def initialize_runtime_content(root: str | Path | None = None) -> list[Path]:
@@ -128,14 +153,39 @@ def initialize_runtime_content(root: str | Path | None = None) -> list[Path]:
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(0o700)
     created: list[Path] = []
-    for relative_path in RUNTIME_FILES:
+    resources = list(_runtime_resource_files(_runtime_resource_root()))
+    packaged_index = ""
+    for relative_path, resource in resources:
+        if relative_path == "skills/index.md":
+            packaged_index = resource.read_text(encoding="utf-8")
         destination = directory / relative_path
         if destination.exists():
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(_runtime_resource_text(relative_path), encoding="utf-8")
+        destination.write_bytes(resource.read_bytes())
         created.append(destination)
+    index_path = directory / "skills" / "index.md"
+    if packaged_index and index_path.is_file() and _merge_new_skill_entries(index_path, packaged_index):
+        created.append(index_path)
     return created
+
+
+def _merge_new_skill_entries(index_path: Path, packaged_index: str) -> bool:
+    """Append newly shipped Skills without changing existing user-owned entries."""
+    current = index_path.read_text(encoding="utf-8")
+    existing_names = {match.group(1) for match in SKILL_INDEX_ENTRY.finditer(current)}
+    additions = [
+        match.group(0).strip()
+        for match in SKILL_INDEX_ENTRY.finditer(packaged_index)
+        if match.group(1) not in existing_names
+    ]
+    if not additions:
+        return False
+    updated = current.rstrip() + "\n\n" + "\n\n".join(additions) + "\n"
+    temporary = index_path.with_suffix(".md.tmp")
+    temporary.write_text(updated, encoding="utf-8")
+    temporary.replace(index_path)
+    return True
 
 
 class RuntimeContentLoader:
@@ -183,9 +233,12 @@ class RuntimeContentLoader:
             path = self._safe_path(skills_root, str(entry.get("path", "")))
             if not path.is_file():
                 raise FileNotFoundError(path)
+            frontmatter, _ = _parse_skill(path.read_text(encoding="utf-8"))
+            if frontmatter["name"] != name:
+                raise ValueError(f"skill index/frontmatter name mismatch: {name}")
             catalog.append(SkillIndexEntry(
                 name=name,
-                description=str(entry.get("description", "")),
+                description=str(frontmatter["description"]),
                 path=str(entry.get("path", "")),
                 requires=tuple(str(value) for value in entry.get("requires", [])),
                 phases=tuple(str(value) for value in entry.get("phases", [])),
@@ -211,20 +264,26 @@ class RuntimeContentLoader:
         return value
 
 
-def _parse_skill(content: str) -> tuple[dict[str, str], str]:
+def _parse_skill(content: str) -> tuple[dict[str, Any], str]:
     frontmatter, body = _split_frontmatter(content, "SKILL.md")
-    if not frontmatter.get("name") or not frontmatter.get("description"):
+    if not isinstance(frontmatter.get("name"), str) or not isinstance(frontmatter.get("description"), str):
         raise ValueError("SKILL.md frontmatter requires name and description")
+    name = frontmatter["name"].strip()
+    description = frontmatter["description"].strip()
+    frontmatter = {**frontmatter, "name": name, "description": description}
+    if not SKILL_NAME.fullmatch(name):
+        raise ValueError(f"invalid SKILL.md name: {name!r}")
+    if not description:
+        raise ValueError("SKILL.md description must not be empty")
+    if len(description) > 1024:
+        raise ValueError("SKILL.md description must not exceed 1024 characters")
     return frontmatter, body
 
 
 def _parse_skill_index(content: str) -> dict[str, Any]:
     frontmatter, body = _split_frontmatter(content, "skills/index.md")
     skills: list[dict[str, Any]] = []
-    for match in re.finditer(
-        r"(?ms)^##\s+([a-z0-9][a-z0-9-]{0,63})\s*$\n(.*?)(?=^##\s+|\Z)",
-        body,
-    ):
+    for match in SKILL_INDEX_ENTRY.finditer(body):
         name, block = match.groups()
         fields: dict[str, str] = {}
         for line in block.splitlines():
@@ -256,18 +315,16 @@ def _parse_skill_index(content: str) -> dict[str, Any]:
     return {**frontmatter, "skills": skills}
 
 
-def _split_frontmatter(content: str, label: str) -> tuple[dict[str, str], str]:
+def _split_frontmatter(content: str, label: str) -> tuple[dict[str, Any], str]:
     if not content.startswith("---\n"):
         raise ValueError(f"{label} must start with YAML frontmatter")
     end = content.find("\n---\n", 4)
     if end < 0:
         raise ValueError(f"{label} frontmatter is not terminated")
-    frontmatter: dict[str, str] = {}
-    for line in content[4:end].splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        key, separator, value = line.partition(":")
-        if not separator:
-            raise ValueError(f"invalid {label} frontmatter line: {line}")
-        frontmatter[key.strip()] = value.strip().strip('"\'')
+    try:
+        frontmatter = yaml.safe_load(content[4:end])
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid {label} YAML frontmatter: {exc}") from exc
+    if not isinstance(frontmatter, dict):
+        raise ValueError(f"{label} YAML frontmatter must be an object")
     return frontmatter, content[end + 5:].strip()

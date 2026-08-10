@@ -37,12 +37,12 @@ def model_config_path(value: str | None = None) -> Path:
     requested = value or os.environ.get("TOE_DAC_MODEL_CONFIG")
     if requested:
         return Path(requested).expanduser()
-    project_config = Path(DEFAULT_MODEL_CONFIG)
-    if project_config.exists():
-        return project_config
     installed_config = user_config_dir() / "models.json"
     if installed_config.exists():
         return installed_config
+    project_config = Path(DEFAULT_MODEL_CONFIG)
+    if project_config.exists():
+        return project_config
     return project_config
 
 

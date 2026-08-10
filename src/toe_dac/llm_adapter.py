@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import time
+import asyncio
+import copy
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,7 +12,7 @@ from typing import Any
 from . import llm as local_llm
 from .environment import load_environment
 from .runtime_content import RuntimeContentLoader, RuntimePromptSnapshot
-from .skill_runtime import SkillToolRuntime
+from .skill_runtime import SkillToolResult, SkillToolRuntime
 
 
 @dataclass
@@ -33,11 +35,13 @@ class LLMOutputError(ValueError):
         raw_output: str | None = None,
         model_id: str | None = None,
         attempts: list[dict[str, Any]] | None = None,
+        category: str = "structured_output",
     ):
         super().__init__(message)
         self.raw_output = raw_output
         self.model_id = model_id
         self.attempts = attempts or []
+        self.category = category
 
 
 class TOEDACLLMAdapter:
@@ -73,16 +77,36 @@ class TOEDACLLMAdapter:
         self.runtime_snapshot = runtime_snapshot
         self.skill_runtime = skill_runtime or SkillToolRuntime()
         self._last_skill_events: list[dict[str, Any]] = []
+        self._tool_result_cache: dict[str, Any] = {}
+        self._configured_session_id: str | None = None
+        self._session_control_dir: Path | None = None
         provider = self.llm_module.LLMProvider.OPENAI
         self.client = self.llm_module.LLMClient(
             api_key=api_key,
             provider=provider,
             api_base=self.model_config["url"],
             model=self.model_config["id"],
+            retry_config=self.llm_module.RetryConfig(
+                max_retries=int(self.model_config.get("transportRetries", 2)),
+                base_delay=float(self.model_config.get("transportRetryBaseDelay", 0.5)),
+                max_delay=float(self.model_config.get("transportRetryMaxDelay", 2.0)),
+                backoff_factor=2.0,
+            ),
         )
 
     def configure_evidence(self, screenshot_dir: Path, session_id: str) -> None:
+        if self._configured_session_id not in {None, session_id}:
+            self._tool_result_cache.clear()
+            self._session_control_dir = None
+        self._configured_session_id = session_id
         self.skill_runtime.configure_evidence(screenshot_dir, session_id)
+        session_dir = screenshot_dir.resolve().parent
+        if session_dir.name == "view":
+            session_dir = session_dir.parent
+        self._session_control_dir = session_dir / "control"
+        self._session_control_dir.mkdir(parents=True, exist_ok=True)
+        self._session_control_dir.chmod(0o700)
+        self._load_persisted_runtime_state()
 
     async def generate_structured(
         self,
@@ -119,6 +143,7 @@ class TOEDACLLMAdapter:
             repaired = await self._call(
                 system_prompt, repair_payload, tool_name, schema,
                 phase=phase, progress_callback=progress_callback,
+                allow_runtime_tools=False,
             )
             try:
                 parsed = self._parse(repaired, tool_name)
@@ -150,6 +175,7 @@ class TOEDACLLMAdapter:
         *,
         phase: str = "",
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        allow_runtime_tools: bool = True,
     ):
         phase_tool = {
             "type": "function",
@@ -159,7 +185,12 @@ class TOEDACLLMAdapter:
                 "parameters": schema,
             },
         }
-        available_names = [entry.name for entry in self.runtime_snapshot.available_skills]
+        active_names = {skill.name for skill in self.runtime_snapshot.skills}
+        available_names = [
+            entry.name for entry in self.runtime_snapshot.available_skills
+            if entry.name not in active_names
+            and (not entry.phases or not phase or phase in entry.phases)
+        ] if allow_runtime_tools else []
         load_tool = {
             "type": "function",
             "function": {
@@ -187,7 +218,8 @@ class TOEDACLLMAdapter:
             ),
         ]
         skill_call_counts: dict[str, int] = {}
-        for _ in range(8):
+        max_rounds = 8 if allow_runtime_tools else 1
+        for _ in range(max_rounds):
             messages = [
                 self.llm_module.Message(
                     role=self.llm_module.MessageRole.SYSTEM,
@@ -196,13 +228,24 @@ class TOEDACLLMAdapter:
                 *transcript,
             ]
             tools = [phase_tool]
-            if available_names and phase == "observe":
+            if available_names:
                 tools.append(load_tool)
             active_names = {skill.name for skill in self.runtime_snapshot.skills}
-            tools.extend(self.skill_runtime.tool_definitions(active_names, phase))
+            configure_skills = getattr(self.skill_runtime, "configure_skills", None)
+            if configure_skills:
+                configure_skills(self.runtime_snapshot.skills)
+            if allow_runtime_tools:
+                tools.extend(self.skill_runtime.tool_definitions(active_names, phase))
             model_started = time.monotonic()
             if progress_callback:
                 progress_callback({"type": "model_call_started", "phase": phase})
+            previous_retry_callback = getattr(self.client, "retry_callback", None)
+            if progress_callback:
+                self.client.retry_callback = lambda info: progress_callback({
+                    "type": "model_transport_retry",
+                    "phase": phase,
+                    **info,
+                })
             try:
                 response = await self.client.generate(messages, tools=tools)
             except Exception as exc:
@@ -214,16 +257,22 @@ class TOEDACLLMAdapter:
                         "error_type": type(exc).__name__,
                         "error": str(exc),
                     })
+                transport_attempts = getattr(exc, "attempts", None)
+                attempts = [{
+                    "stage": "model_transport" if transport_attempts else "model_call",
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    **({"transport_attempts": transport_attempts} if transport_attempts else {}),
+                }]
                 raise LLMOutputError(
                     f"model runtime failed: {type(exc).__name__}: {exc}",
                     model_id=str(self.model_config.get("id", "")) or None,
-                    attempts=[{
-                        "stage": "model_call",
-                        "status": "failed",
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                    }],
+                    attempts=attempts,
+                    category="model_transport" if transport_attempts else "model_runtime",
                 ) from exc
+            finally:
+                self.client.retry_callback = previous_retry_callback
             if progress_callback:
                 progress_callback({
                     "type": "model_call_completed",
@@ -252,6 +301,8 @@ class TOEDACLLMAdapter:
                 arguments = self._tool_arguments(call, response)
                 if name == "load_skill":
                     output = self._activate_skills(arguments, response)
+                    loaded_now = set(output.get("loaded", [])) | set(output.get("already_loaded", []))
+                    available_names[:] = [item for item in available_names if item not in loaded_now]
                     if progress_callback:
                         progress_callback({
                             "type": "skill_loaded" if output.get("ok") else "skill_load_failed",
@@ -260,21 +311,41 @@ class TOEDACLLMAdapter:
                             "error": output.get("error"),
                         })
                 else:
-                    skill_call_counts[name] = skill_call_counts.get(name, 0) + 1
-                    call_number = skill_call_counts[name]
-                    if skill_call_counts[name] > 3:
+                    budget_key = name
+                    if name == "run_skill_script":
+                        script_arguments = arguments.get("arguments", [])
+                        operation = (
+                            str(script_arguments[0])
+                            if isinstance(script_arguments, list) and script_arguments
+                            else ""
+                        )
+                        job_id = ""
+                        if isinstance(script_arguments, list) and "--job-id" in script_arguments:
+                            job_index = script_arguments.index("--job-id") + 1
+                            if job_index < len(script_arguments):
+                                job_id = str(script_arguments[job_index])
+                        budget_key = ":".join((
+                            name,
+                            str(arguments.get("skill_name", "")),
+                            str(arguments.get("script", "")),
+                            operation,
+                            job_id,
+                        ))
+                    skill_call_counts[budget_key] = skill_call_counts.get(budget_key, 0) + 1
+                    call_number = skill_call_counts[budget_key]
+                    if call_number > 3:
                         output = {
                             "ok": False,
-                            "error": f"{name} exceeded the per-phase call budget of 3",
+                            "error": f"{budget_key} exceeded the per-phase call budget of 3",
                             "instruction": "Use collected evidence or ask the human; do not retry.",
                         }
                         self._last_skill_events.append({
-                            "skill": "agent-browser" if name.startswith("agent_browser") else "alex-serp",
+                            "skill": self._skill_name_for_tool(name, arguments),
                             "tool": name,
                             "status": "failed",
                             "error_type": "SkillBudgetExceeded",
                             "error": output["error"],
-                            "attempt_count": skill_call_counts[name],
+                            "attempt_count": call_number,
                         })
                         if progress_callback:
                             progress_callback({
@@ -286,14 +357,38 @@ class TOEDACLLMAdapter:
                             progress_callback({
                                 "type": "skill_tool_started", "phase": phase, "tool": name,
                                 "call_number": call_number, "budget": 3,
-                                "input": arguments,
+                                "input": self._safe_progress_input(name, arguments),
                             })
-                        result = await self.skill_runtime.execute(
-                            name,
-                            arguments,
-                            progress_callback=progress_callback,
-                        )
+                        cache_key = self._tool_cache_key(name, arguments)
+                        cacheable_phase = phase in {"observe", "act"}
+                        cached = self._tool_result_cache.get(cache_key) if cacheable_phase else None
+                        if cached is not None:
+                            result = self._reused_tool_result(cached, cache_key)
+                        else:
+                            result = await self.skill_runtime.execute(
+                                name,
+                                arguments,
+                                progress_callback=progress_callback,
+                            )
+                            result = await self._settle_observe_job(
+                                result,
+                                arguments,
+                                phase=phase,
+                                progress_callback=progress_callback,
+                            )
                         output = result.output
+                        event = copy.deepcopy(result.event)
+                        event["raw_input"] = copy.deepcopy(arguments)
+                        event["raw_output"] = copy.deepcopy(output)
+                        if name == "run_skill_script":
+                            event["evidence_role"] = str(
+                                arguments.get("evidence_role")
+                                or ("observation" if phase == "observe" else "result")
+                            )
+                        result = SkillToolResult(output, event)
+                        if cacheable_phase and cached is None and result.output.get("ok"):
+                            self._tool_result_cache[cache_key] = result
+                            self._persist_tool_checkpoint(cache_key, result)
                         self._last_skill_events.append(result.event)
                         if progress_callback:
                             progress_callback({
@@ -311,9 +406,185 @@ class TOEDACLLMAdapter:
                     tool_call_id=getattr(call, "id", "") or "runtime_tool",
                 ))
         raise LLMOutputError(
-            "progressive skill/tool loop exceeded 8 rounds",
+            f"progressive skill/tool loop exceeded {max_rounds} rounds",
             attempts=list(self._last_skill_events),
         )
+
+    @staticmethod
+    def _tool_cache_key(tool_name: str, arguments: dict[str, Any]) -> str:
+        return json.dumps(
+            {"tool": tool_name, "arguments": arguments},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def _load_persisted_runtime_state(self) -> None:
+        if getattr(self, "_session_control_dir", None) is None:
+            return
+        skills_path = self._session_control_dir / "loaded-skills.json"
+        try:
+            skills_value = json.loads(skills_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            skills_value = []
+        if isinstance(skills_value, list):
+            known = {entry.name for entry in self.runtime_snapshot.available_skills}
+            names = [str(item) for item in skills_value if str(item) in known]
+            if names:
+                try:
+                    self.runtime_snapshot = self.runtime_snapshot.activate(names)
+                except (OSError, ValueError):
+                    pass
+        checkpoint_path = self._session_control_dir / "tool-checkpoints.jsonl"
+        try:
+            lines = checkpoint_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return
+        for line in lines:
+            try:
+                record = json.loads(line)
+                key = str(record["cache_key"])
+                output = record["output"]
+                event = record["event"]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
+            if isinstance(output, dict) and isinstance(event, dict):
+                self._tool_result_cache[key] = SkillToolResult(output, event)
+
+    def _persist_loaded_skills(self) -> None:
+        if getattr(self, "_session_control_dir", None) is None:
+            return
+        path = self._session_control_dir / "loaded-skills.json"
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps([skill.name for skill in self.runtime_snapshot.skills], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+
+    def _persist_tool_checkpoint(self, cache_key: str, result: SkillToolResult) -> None:
+        if getattr(self, "_session_control_dir", None) is None:
+            return
+        path = self._session_control_dir / "tool-checkpoints.jsonl"
+        record = {"cache_key": cache_key, "output": result.output, "event": result.event}
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+    @staticmethod
+    def _reused_tool_result(result: SkillToolResult, cache_key: str) -> SkillToolResult:
+        output = copy.deepcopy(result.output)
+        output["checkpoint_reused"] = True
+        event = copy.deepcopy(result.event)
+        event.update({
+            "status": "succeeded",
+            "checkpoint_reused": True,
+            "cache_key": cache_key,
+            "duration_ms": 0,
+        })
+        return SkillToolResult(output, event)
+
+    @staticmethod
+    def _script_payload(result: SkillToolResult) -> dict[str, Any] | None:
+        stdout = result.output.get("stdout")
+        if not isinstance(stdout, str) or not stdout.strip():
+            return None
+        try:
+            payload = json.loads(stdout)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    @classmethod
+    def _with_script_payload(cls, result: SkillToolResult) -> SkillToolResult:
+        payload = cls._script_payload(result)
+        if payload is None:
+            return result
+        output = copy.deepcopy(result.output)
+        output["result"] = payload
+        return SkillToolResult(output, copy.deepcopy(result.event))
+
+    async def _settle_observe_job(
+        self,
+        result: SkillToolResult,
+        arguments: dict[str, Any],
+        *,
+        phase: str,
+        progress_callback: Callable[[dict[str, Any]], None] | None,
+    ) -> SkillToolResult:
+        result = self._with_script_payload(result)
+        script_arguments = arguments.get("arguments", [])
+        if (
+            phase != "observe"
+            or arguments.get("skill_name") != "run-cmd"
+            or arguments.get("script") != "scripts/run_cmd.py"
+            or not isinstance(script_arguments, list)
+            or not script_arguments
+            or script_arguments[0] != "start"
+        ):
+            return result
+        payload = result.output.get("result")
+        if not isinstance(payload, dict) or payload.get("status") != "running" or not payload.get("job_id"):
+            return result
+        job_id = str(payload["job_id"])
+        timeout = arguments.get("timeout", 120)
+        wait_seconds = min(float(timeout) if isinstance(timeout, int) else 120.0, 30.0)
+        deadline = time.monotonic() + wait_seconds
+        polls = 0
+        if progress_callback:
+            progress_callback({
+                "type": "background_job_waiting",
+                "phase": phase,
+                "job_id": job_id,
+                "timeout_seconds": wait_seconds,
+            })
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.2)
+            polls += 1
+            status_arguments = {
+                "skill_name": "run-cmd",
+                "script": "scripts/run_cmd.py",
+                "arguments": ["status", "--job-id", job_id],
+                "timeout": min(int(wait_seconds) or 1, 30),
+            }
+            status_result = await self.skill_runtime.execute(
+                "run_skill_script",
+                status_arguments,
+                progress_callback=progress_callback,
+            )
+            status_result = self._with_script_payload(status_result)
+            status_payload = status_result.output.get("result")
+            if not isinstance(status_payload, dict):
+                return status_result
+            if status_payload.get("status") != "running":
+                event = copy.deepcopy(status_result.event)
+                event.update({
+                    "controller_polled": True,
+                    "job_id": job_id,
+                    "poll_count": polls,
+                })
+                if progress_callback:
+                    progress_callback({
+                        "type": "background_job_completed",
+                        "phase": phase,
+                        "job_id": job_id,
+                        "status": status_payload.get("status"),
+                        "poll_count": polls,
+                    })
+                return SkillToolResult(status_result.output, event)
+        output = copy.deepcopy(result.output)
+        output["controller_wait_timeout"] = True
+        output["instruction"] = (
+            "The controller stopped waiting for this background job. Do not poll it repeatedly in the model loop; "
+            "submit the currently known state or choose a bounded alternative."
+        )
+        event = copy.deepcopy(result.event)
+        event.update({
+            "controller_polled": True,
+            "job_id": job_id,
+            "poll_count": polls,
+            "wait_timeout": True,
+        })
+        return SkillToolResult(output, event)
 
     def _activate_skills(self, arguments: dict[str, Any], response: Any) -> dict[str, Any]:
         names = arguments.get("names", [])
@@ -334,6 +605,7 @@ class TOEDACLLMAdapter:
             self._last_skill_events.append(event)
             return {"ok": False, "error": str(exc), "instruction": "Do not blindly retry; choose another path or ask the human."}
         loaded = [skill.name for skill in self.runtime_snapshot.skills if skill.name not in before]
+        self._persist_loaded_skills()
         self._last_skill_events.append({
             "skill": ",".join(names),
             "tool": "load_skill",
@@ -343,6 +615,27 @@ class TOEDACLLMAdapter:
             "attempt_count": 1,
         })
         return {"ok": True, "loaded": loaded, "already_loaded": [name for name in names if name in before]}
+
+    @staticmethod
+    def _skill_name_for_tool(tool_name: str, arguments: dict[str, Any]) -> str:
+        if tool_name == "run_skill_script":
+            return str(arguments.get("skill_name", ""))
+        if tool_name.startswith("agent_browser"):
+            return "agent-browser"
+        return "alex-serp"
+
+    @staticmethod
+    def _safe_progress_input(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if tool_name != "run_skill_script":
+            return arguments
+        script_arguments = arguments.get("arguments", [])
+        return {
+            "skill_name": arguments.get("skill_name"),
+            "script": arguments.get("script"),
+            "argument_count": len(script_arguments) if isinstance(script_arguments, list) else None,
+            "timeout": arguments.get("timeout", 120),
+            "evidence_role": arguments.get("evidence_role", "result"),
+        }
 
     @staticmethod
     def _tool_call_dict(call: Any) -> dict[str, Any]:
@@ -371,7 +664,8 @@ class TOEDACLLMAdapter:
     @staticmethod
     def _parse(response: Any, tool_name: str) -> StructuredLLMResult:
         data = None
-        for call in response.tool_calls or []:
+        tool_calls = getattr(response, "tool_calls", None) or []
+        for call in tool_calls:
             function = call.function
             if function.get("name") != tool_name:
                 continue
@@ -388,8 +682,9 @@ class TOEDACLLMAdapter:
             else:
                 data = arguments
             break
-        if data is None and response.content:
-            content = response.content.strip()
+        content_value = getattr(response, "content", None)
+        if data is None and content_value:
+            content = content_value.strip()
             if content.startswith("```"):
                 lines = content.splitlines()
                 content = "\n".join(lines[1:-1])
@@ -401,8 +696,26 @@ class TOEDACLLMAdapter:
                     raw_output=content,
                     model_id=response.model_id,
                 ) from exc
+        if data is None:
+            returned_tools = [str(call.function.get("name", "")) for call in tool_calls]
+            if returned_tools:
+                message = (
+                    f"model omitted required tool {tool_name}; returned tools: "
+                    + ", ".join(returned_tools)
+                )
+            else:
+                message = f"model returned an empty response without required tool {tool_name}"
+            raise LLMOutputError(
+                message,
+                raw_output=TOEDACLLMAdapter._response_output(response),
+                model_id=getattr(response, "model_id", None),
+            )
         if not isinstance(data, dict):
-            raise LLMOutputError("structured model output must be an object")
+            raise LLMOutputError(
+                f"{tool_name} arguments must be an object, got {type(data).__name__}",
+                raw_output=TOEDACLLMAdapter._response_output(response),
+                model_id=getattr(response, "model_id", None),
+            )
         return StructuredLLMResult(
             data=data,
             model_id=response.model_id,
@@ -413,11 +726,20 @@ class TOEDACLLMAdapter:
 
     @staticmethod
     def _response_output(response: Any) -> str | None:
-        for call in response.tool_calls or []:
-            arguments = call.function.get("arguments")
-            if isinstance(arguments, str):
-                return arguments
-        return response.content
+        calls = []
+        for call in getattr(response, "tool_calls", None) or []:
+            calls.append({
+                "name": call.function.get("name"),
+                "arguments": call.function.get("arguments"),
+            })
+        evidence = {
+            "content": getattr(response, "content", None),
+            "tool_calls": calls,
+            "finish_reason": getattr(response, "finish_reason", None),
+        }
+        if not calls and evidence["content"] is None and evidence["finish_reason"] is None:
+            return None
+        return json.dumps(evidence, ensure_ascii=False)
 
     @staticmethod
     def _error_evidence(stage: str, error: LLMOutputError) -> dict[str, Any]:
@@ -583,7 +905,10 @@ PLAN_TOOL_SCHEMA = {
                             "objective": {"type": "string"},
                             "depends_on": {"type": "array", "items": {"type": "string"}},
                             "instruction": {"type": "string"},
-                            "executor": {"type": "string", "enum": ["agent_response", "external"]},
+                            "executor": {
+                                "type": "string",
+                                "enum": ["agent_response", "skill_script", "external"],
+                            },
                             "assertions": {
                                 "type": "array",
                                 "items": {
@@ -597,6 +922,10 @@ PLAN_TOOL_SCHEMA = {
                                 },
                             },
                             "max_attempts": {"type": "integer", "minimum": 1},
+                            "changes_state": {
+                                "type": "boolean",
+                                "description": "Action 是否会改变外部或工作区状态",
+                            },
                         },
                         "required": ["action_id", "objective", "depends_on", "instruction", "executor", "assertions", "max_attempts"],
                     },
